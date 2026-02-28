@@ -74,8 +74,10 @@ def get_next_stt():
 def get_user(user_id, username=None):
     user = users_col.find_one({'_id': user_id})
     if not user:
+        # THÊM: total_deposited (tổng nạp) và total_bet (tổng cược) để tính vòng cược
         user = {'_id': user_id, 'stt': get_next_stt(), 'username': (username or "user").lower(),
-                'balance': 5000, 'vip': 0, 'is_banned': False, 'joined_at': datetime.now()}
+                'balance': 5000, 'vip': 0, 'is_banned': False, 'joined_at': datetime.now(),
+                'total_deposited': 0, 'total_bet': 0}
         users_col.insert_one(user)
     return user
 
@@ -154,12 +156,12 @@ def get_deposit_kb():
 def get_withdraw_kb():
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.add(
-        types.InlineKeyboardButton("70k", callback_data="rut_70000"),
         types.InlineKeyboardButton("100k", callback_data="rut_100000"),
         types.InlineKeyboardButton("200k", callback_data="rut_200000"),
         types.InlineKeyboardButton("500k", callback_data="rut_500000"),
         types.InlineKeyboardButton("1M", callback_data="rut_1000000"),
-        types.InlineKeyboardButton("2M", callback_data="rut_2000000")
+        types.InlineKeyboardButton("2M", callback_data="rut_2000000"),
+        types.InlineKeyboardButton("5M", callback_data="rut_5000000")
     )
     kb.add(types.InlineKeyboardButton("✍️ SỐ TIỀN KHÁC", callback_data="rut_custom"))
     kb.add(types.InlineKeyboardButton("🏠 VỀ TRANG CHỦ", callback_data="u_main"))
@@ -217,7 +219,19 @@ def handle_user_menus(call):
             
         elif act == "u_me":
             rate = 1.89 + (user['vip'] * 0.1)
-            text = f"🔰 **CÁ NHÂN**\n\n👤 Tên: @{user['username']}\n🔢 STT: `#{user['stt']}`\n💰 Dư: **{format_money(user['balance'])}**\n🌟 VIP: `{user['vip']}` (Tỉ lệ ăn: x{rate:.2f})"
+            total_dep = user.get('total_deposited', 0)
+            total_bet = user.get('total_bet', 0)
+            
+            text = (
+                f"🔰 **CÁ NHÂN**\n\n"
+                f"👤 Tên: @{user['username']}\n"
+                f"🔢 STT: `#{user['stt']}`\n"
+                f"💰 Dư: **{format_money(user['balance'])}**\n"
+                f"🌟 VIP: `{user['vip']}` (Tỉ lệ ăn: x{rate:.2f})\n"
+                "〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                f"💵 Tổng Nạp: **{format_money(total_dep)}**\n"
+                f"🎲 Tổng Cược: **{format_money(total_bet)}**"
+            )
             bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
             
         elif act == "u_play_menu":
@@ -233,8 +247,25 @@ def handle_user_menus(call):
         elif act == "deposit_menu":
             bot.edit_message_text("💳 **HỆ THỐNG NẠP TIỀN TỰ ĐỘNG**\n\n👉 Chọn số tiền bạn muốn nạp vào tài khoản:", m.chat.id, m.message_id, reply_markup=get_deposit_kb(), parse_mode='Markdown')
 
+        # --- LOGIC TÍNH TOÁN VÒNG CƯỢC 150% TRƯỚC KHI RÚT ---
         elif act == "withdraw_menu":
-            bot.edit_message_text(f"💸 **HỆ THỐNG RÚT TIỀN**\nSố dư khả dụng: **{format_money(user['balance'])}**\n\n👉 Chọn số tiền muốn rút (Tối thiểu 70k):", m.chat.id, m.message_id, reply_markup=get_withdraw_kb(), parse_mode='Markdown')
+            total_dep = user.get('total_deposited', 0)
+            total_bet = user.get('total_bet', 0)
+            req_bet = int(total_dep * 1.5) # Yêu cầu cược = 150% nạp
+            
+            if total_bet < req_bet:
+                rem_bet = req_bet - total_bet
+                text_error = (
+                    f"💸 **HỆ THỐNG RÚT TIỀN**\n\n"
+                    f"❌ **BẠN CHƯA ĐỦ ĐIỀU KIỆN RÚT TIỀN!**\n"
+                    f"*(Yêu cầu phải đạt vòng cược 150% tổng nạp)*\n\n"
+                    f"💵 Tổng tiền đã nạp: **{format_money(total_dep)}**\n"
+                    f"🎲 Vòng cược hiện tại: **{format_money(total_bet)}** / **{format_money(req_bet)}**\n\n"
+                    f"👉 **Còn thiếu:** Bạn cần cược thêm **{format_money(rem_bet)}** nữa để mở khóa tính năng rút tiền!"
+                )
+                bot.edit_message_text(text_error, m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+            else:
+                bot.edit_message_text(f"💸 **HỆ THỐNG RÚT TIỀN**\nSố dư khả dụng: **{format_money(user['balance'])}**\n\n👉 Chọn số tiền muốn rút (Tối thiểu 100k):", m.chat.id, m.message_id, reply_markup=get_withdraw_kb(), parse_mode='Markdown')
 
         elif act == "u_code":
             msg = bot.edit_message_text("🎁 **NHẬP GIFTCODE**\n\n⌨️ **Hãy nhập mã code của bạn:**", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
@@ -243,7 +274,7 @@ def handle_user_menus(call):
     except: pass 
 
 # ==========================================
-# XỬ LÝ CHƠI GAME & NHẬP CODE
+# XỬ LÝ CHƠI GAME & CỘNG VÒNG CƯỢC
 # ==========================================
 
 def process_play_amount(message, old_msg_id):
@@ -258,7 +289,8 @@ def process_play_amount(message, old_msg_id):
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_play_amount, old_msg_id)
         return
 
-    users_col.update_one({'_id': user['_id']}, {'$inc': {'balance': -bet}})
+    # Trừ tiền balance VÀ CỘNG tiền cược vào total_bet
+    users_col.update_one({'_id': user['_id']}, {'$inc': {'balance': -bet, 'total_bet': bet}})
     try: bot.delete_message(message.chat.id, old_msg_id)
     except: pass
 
@@ -349,7 +381,6 @@ def generate_deposit_qr(message, user, amt, msg_id_to_delete=None):
         except: pass
 
     now_time = int(time.time())
-    # Hủy đơn cũ
     deposits_col.update_many({"user_id": user['_id'], "status": "pending", "expired_at": {"$lt": now_time}}, {"$set": {"status": "cancelled"}})
     
     if deposits_col.find_one({"user_id": user['_id'], "status": "pending"}):
@@ -411,7 +442,7 @@ def handle_bill_photo(message):
     bot.send_message(message.chat.id, text, reply_markup=menu, parse_mode='Markdown')
 
 # ==========================================
-# RÚT TIỀN (WITHDRAW)
+# RÚT TIỀN (WITHDRAW) - UPDATE MIN 100K & VÒNG CƯỢC
 # ==========================================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rut_'))
@@ -421,14 +452,22 @@ def handle_withdraw_calls(call):
     m = call.message
     uid = call.from_user.id
     
+    # Kẻ thù hack API chèn lệnh rút: Phải double-check lại vòng cược ở đây
+    total_dep = user.get('total_deposited', 0)
+    total_bet = user.get('total_bet', 0)
+    req_bet = int(total_dep * 1.5)
+    
+    if total_bet < req_bet:
+        return bot.answer_callback_query(call.id, f"❌ Chưa đủ điều kiện! Bạn cần cược thêm {format_money(req_bet - total_bet)}", show_alert=True)
+    
     if act == "rut_custom":
-        msg = bot.edit_message_text(f"⌨️ **NHẬP SỐ TIỀN MUỐN RÚT:**\n*(Min 70k, Dư: {format_money(user['balance'])})*", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+        msg = bot.edit_message_text(f"⌨️ **NHẬP SỐ TIỀN MUỐN RÚT:**\n*(Min 100k, Dư: {format_money(user['balance'])})*", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_rut_custom, m.message_id)
         
     elif act.startswith("rut_"):
         amt = int(act.split("_")[1])
-        if amt < 70000 or amt > user['balance']:
-            return bot.answer_callback_query(call.id, "❌ Bạn không đủ số dư!", show_alert=True)
+        if amt < 100000 or amt > user['balance']:
+            return bot.answer_callback_query(call.id, "❌ Bạn không đủ số dư để rút mức này!", show_alert=True)
             
         temp_data[uid] = {'action': 'rut', 'amount': amt}
         msg = bot.edit_message_text(f"💸 Đang rút: **{format_money(amt)}**\n\n⌨️ **NHẬP THÔNG TIN NHẬN TIỀN:**\n*(VD: MB 12345 Nguyen Van A)*", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
@@ -440,8 +479,17 @@ def process_rut_custom(message, old_msg_id):
     amt = parse_money(message.text)
     user = get_user(message.from_user.id)
     
-    if amt < 70000 or amt > user['balance']:
-        bot.edit_message_text(f"❌ Số tiền không hợp lệ! (Min 70k, Dư: {format_money(user['balance'])})\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+    # Kiểm tra vòng cược 1 lần nữa cho an toàn
+    total_dep = user.get('total_deposited', 0)
+    total_bet = user.get('total_bet', 0)
+    req_bet = int(total_dep * 1.5)
+    
+    if total_bet < req_bet:
+        bot.edit_message_text(f"❌ Bạn cần cược thêm {format_money(req_bet - total_bet)} nữa để mở khóa rút tiền!", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+        return
+
+    if amt < 100000 or amt > user['balance']:
+        bot.edit_message_text(f"❌ Số tiền không hợp lệ! (Min 100k, Dư: {format_money(user['balance'])})\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_rut_custom, old_msg_id)
         return
         
@@ -457,7 +505,7 @@ def process_rut_info(message, old_msg_id):
     amt = temp_data.get(uid, {}).get('amount', 0)
     info = message.text.strip()
     
-    if amt <= 0 or amt > user['balance']:
+    if amt < 100000 or amt > user['balance']:
         text, markup = get_main_menu(user)
         bot.edit_message_text(f"❌ Có lỗi xảy ra. Đã hủy lệnh rút!\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
         return
@@ -468,10 +516,10 @@ def process_rut_info(message, old_msg_id):
     
     kb = types.InlineKeyboardMarkup()
     kb.add(
-        types.InlineKeyboardButton("✅ ĐÃ CHUYỂN TIỀN", callback_data=f"admw_appr_{w_id}"),
+        types.InlineKeyboardButton("✅ ĐÃ CHUYỂN TIỀN (DUYỆT)", callback_data=f"admw_appr_{w_id}"),
         types.InlineKeyboardButton("❌ TỪ CHỐI (HOÀN TIỀN)", callback_data=f"admw_reje_{w_id}")
     )
-    admin_text = f"💸 **YÊU CẦU RÚT TIỀN**\n👤 STT: `#{user['stt']}` (ID: `{uid}`)\n💰 Số tiền: **{format_money(amt)}**\n💳 Thông tin CK: `{info}`"
+    admin_text = f"💸 **YÊU CẦU RÚT TIỀN**\n👤 STT: `#{user['stt']}` (ID: `{uid}`)\n💰 Số tiền: **{format_money(amt)}** ({amt:,} VNĐ)\n💳 Thông tin CK: `{info}`"
     bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode='Markdown')
     
     text, m_markup = get_main_menu(get_user(uid))
@@ -499,10 +547,11 @@ def handle_admin_actions(call):
         dep_id = act.split("_")[1]
         dep = deposits_col.find_one({"_id": dep_id})
         if dep and dep['status'] == 'reviewing':
-            users_col.update_one({'_id': dep['user_id']}, {'$inc': {'balance': dep['amount']}})
+            # QUAN TRỌNG: Cộng cả balance VÀ total_deposited
+            users_col.update_one({'_id': dep['user_id']}, {'$inc': {'balance': dep['amount'], 'total_deposited': dep['amount']}})
             deposits_col.update_one({'_id': dep_id}, {'$set': {'status': 'approved'}})
             bot.edit_message_caption(f"✅ **ĐÃ DUYỆT CỘNG {format_money(dep['amount'])}**\n\n" + m.caption, m.chat.id, m.message_id, parse_mode='Markdown')
-            try: bot.send_message(dep['user_id'], f"🎉 **Ting Ting!**\nAdmin đã duyệt thành công đơn nạp **{format_money(dep['amount'])}** của bạn!", parse_mode='Markdown')
+            try: bot.send_message(dep['user_id'], f"🎉 **Ting Ting!**\nAdmin đã duyệt nạp **{format_money(dep['amount'])}**! Tiền đã được cập nhật vào ví.", parse_mode='Markdown')
             except: pass
         else: bot.answer_callback_query(call.id, "❌ Đơn này đã xử lý!", show_alert=True)
             
@@ -523,7 +572,7 @@ def handle_admin_actions(call):
         if w and w['status'] == 'pending':
             withdraws_col.update_one({'_id': w_id}, {'$set': {'status': 'approved'}})
             bot.edit_message_text(f"✅ **ĐÃ CHUYỂN TIỀN THÀNH CÔNG**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
-            try: bot.send_message(w['user_id'], f"🎉 **RÚT THÀNH CÔNG**\nYêu cầu rút **{format_money(w['amount'])}** đã được xử lý!", parse_mode='Markdown')
+            try: bot.send_message(w['user_id'], f"🎉 **RÚT THÀNH CÔNG**\nYêu cầu rút **{format_money(w['amount'])}** đã được xử lý. Tiền đã về tài khoản ngân hàng của bạn!", parse_mode='Markdown')
             except: pass
         else: bot.answer_callback_query(call.id, "❌ Đơn này đã xử lý!", show_alert=True)
 
@@ -532,13 +581,13 @@ def handle_admin_actions(call):
         w = withdraws_col.find_one({"_id": w_id})
         if w and w['status'] == 'pending':
             withdraws_col.update_one({'_id': w_id}, {'$set': {'status': 'rejected'}})
-            users_col.update_one({'_id': w['user_id']}, {'$inc': {'balance': w['amount']}}) 
+            users_col.update_one({'_id': w['user_id']}, {'$inc': {'balance': w['amount']}}) # HOÀN TIỀN
             bot.edit_message_text(f"❌ **ĐÃ TỪ CHỐI VÀ HOÀN TIỀN**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
-            try: bot.send_message(w['user_id'], f"⚠️ **RÚT THẤT BẠI**\nYêu cầu rút **{format_money(w['amount'])}** bị từ chối. Số điểm đã hoàn lại vào ví!", parse_mode='Markdown')
+            try: bot.send_message(w['user_id'], f"⚠️ **RÚT THẤT BẠI**\nYêu cầu rút **{format_money(w['amount'])}** bị từ chối. Số điểm đã được hoàn lại vào ví của bạn!", parse_mode='Markdown')
             except: pass
         else: bot.answer_callback_query(call.id, "❌ Đơn này đã xử lý!", show_alert=True)
 
-    # --- ADMIN ĐIỀU HƯỚNG MENU ---
+    # --- CÁC NÚT MENU ADMIN ---
     try:
         if act == "adm_main":
             text, markup = get_admin_menu()
@@ -582,7 +631,7 @@ def process_adm_money(message, old_msg_id, is_add):
             action_text = "CỘNG" if is_add else "TRỪ"
             
             if is_add:
-                try: bot.send_message(u['_id'], f"🔔 Admin đã nạp **{format_money(amt)}** cho bạn!")
+                try: bot.send_message(u['_id'], f"🔔 Admin đã gửi tặng **{format_money(amt)}** cho bạn!")
                 except: pass
                 
             text, markup = get_admin_menu()
