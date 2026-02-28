@@ -1,5 +1,5 @@
 pyTelegramBotAPI
 pymongo
-requests
-dnspython
 flask
+dnspython
+requests
