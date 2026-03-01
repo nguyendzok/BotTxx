@@ -48,7 +48,7 @@ withdraws_col = db['withdraws']
 transactions_col = db['transactions'] 
 
 # ==========================================
-# MIDDLEWARE TỐI ƯU HÓA: CHỈ AUTO-SAVE KHÁCH HÀNG
+# MIDDLEWARE: AUTO-SAVE NGƯỜI DÙNG
 # ==========================================
 class GlobalDatabaseMiddleware(BaseMiddleware):
     def __init__(self):
@@ -192,7 +192,7 @@ def get_deposit_kb():
 
 def get_withdraw_kb():
     kb = types.InlineKeyboardMarkup(row_width=3)
-    # BỎ NÚT 100K, THÊM NÚT 10M CHO ĐỦ MIN RÚT 200K
+    # Rút tiền tối thiểu 200k
     kb.add(types.InlineKeyboardButton("200k", callback_data="rut_200000"), types.InlineKeyboardButton("500k", callback_data="rut_500000"), types.InlineKeyboardButton("1M", callback_data="rut_1000000"),
            types.InlineKeyboardButton("2M", callback_data="rut_2000000"), types.InlineKeyboardButton("5M", callback_data="rut_5000000"), types.InlineKeyboardButton("10M", callback_data="rut_10000000"))
     kb.add(types.InlineKeyboardButton("✍️ SỐ TIỀN KHÁC", callback_data="rut_custom"))
@@ -702,7 +702,7 @@ def handle_admin_actions(call):
             bot.edit_message_text("🗑 **Đã xóa toàn bộ mã Giftcode hiện có trong hệ thống!**", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
         
         # ====================================================
-        # DANH SÁCH USER VÀ TÌM KIẾM
+        # HIỂN THỊ DANH SÁCH USER TRỰC TIẾP LÊN MÀN HÌNH ADMIN
         # ====================================================
         elif act == "adm_mgr":
             cursor = users_col.find().sort("stt", 1)
@@ -716,8 +716,10 @@ def handle_admin_actions(call):
                 tbet = format_money(u.get('total_bet', 0))
                 twon = format_money(u.get('total_won', 0))
                 
+                # Hiển thị trực tiếp STT, Tên, Dư, Cược, Thắng ngay trên bảng
                 line = f"`#{u['stt']}` | `{uname}` | Dư: {bal} | Cược: {tbet} | Win: {twon}\n"
                 
+                # Telegram giới hạn độ dài tin nhắn, nếu quá dài sẽ hiển thị một phần và yêu cầu tải File
                 if len(text_list) + len(line) > 3500:
                     text_list += f"\n*... và {count - shown_count} người dùng khác.*"
                     break
@@ -731,8 +733,11 @@ def handle_admin_actions(call):
             text_list += "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n👇 **Chọn chức năng quản lý chi tiết:**"
             
             kb = types.InlineKeyboardMarkup(row_width=1)
+            # Nút xuất file TXT sẽ hiển thị nếu danh sách bị quá dài
             if count > shown_count:
                 kb.add(types.InlineKeyboardButton("📜 XUẤT TOÀN BỘ RA FILE TXT", callback_data="adm_mgr_list"))
+            else:
+                kb.add(types.InlineKeyboardButton("📜 XUẤT DANH SÁCH RA FILE TXT", callback_data="adm_mgr_list"))
                 
             kb.add(
                 types.InlineKeyboardButton("🔍 SOI THÔNG TIN TỪ STT", callback_data="adm_mgr_info"),
@@ -752,6 +757,7 @@ def handle_admin_actions(call):
                     bal = u.get("balance", 0)
                     tbet = u.get("total_bet", 0)
                     twon = u.get("total_won", 0)
+                    # Định dạng hiển thị cụ thể trong file TXT
                     text_list += f"STT: #{u['stt']} | ID: {u['_id']} | @{uname}\n"
                     text_list += f" ├ Số dư hiện tại : {bal:,} VNĐ\n"
                     text_list += f" ├ Số tiền cược   : {tbet:,} VNĐ\n"
