@@ -24,7 +24,7 @@ if not TOKEN:
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 MONGO_URI = os.getenv('MONGO_URI')
 BANK_STK = os.getenv('BANK_STK', '11223344557766')
-BANK_NAME = os.getenv('BANK_NAME', 'HOANG NGOC NGUYEN')
+BANK_NAME = os.getenv('BANK_NAME', 'MB')
 PORT = int(os.getenv('PORT', 10000))
 
 # Khởi tạo Server Flask
@@ -413,7 +413,7 @@ def process_giftcode(message, old_msg_id):
     bot.edit_message_text(f"🎁 **NHẬP CODE THÀNH CÔNG!**\nNhận được: **{format_money(code['reward'])}**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
 
 # ==========================================
-# NẠP TIỀN & RÚT TIỀN (QR CODE TỰ ĐỘNG)
+# NẠP TIỀN & RÚT TIỀN 
 # ==========================================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('nap_') or call.data.startswith('canceldep_'))
@@ -493,7 +493,6 @@ def handle_bill_photo(message):
     text, menu = get_main_menu(user)
     bot.send_message(message.chat.id, text, reply_markup=menu, parse_mode='Markdown')
 
-# ================= RÚT TIỀN VÀ TỰ TẠO MÃ QR =================
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rut_'))
 def handle_withdraw_calls(call):
     user = get_user(call.from_user.id)
@@ -517,7 +516,6 @@ def handle_withdraw_calls(call):
         if uid not in temp_data: temp_data[uid] = {}
         temp_data[uid]['amount'] = amt
         
-        # BẮT BUỘC ĐỊNH DẠNG ĐỂ TẠO QR
         text_prompt = (
             f"💸 Bạn đang đặt lệnh rút: **{format_money(amt)}**\n\n"
             "⌨️ **NHẬP THÔNG TIN TÀI KHOẢN NHẬN TIỀN:**\n"
@@ -558,7 +556,6 @@ def process_rut_info(message, old_msg_id):
     amt = temp_data.get(uid, {}).get('amount', 0)
     raw_info = message.text.strip()
     
-    # 1. TÁCH DỮ LIỆU ĐỂ TẠO QR
     info_parts = raw_info.split()
     if len(info_parts) < 3:
         bot.edit_message_text(f"❌ Sai định dạng! Vui lòng nhập đúng: `NgânHàng STK Tên`\n*(VD: MB 12345 NGUYEN VAN A)*\n\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
@@ -578,17 +575,13 @@ def process_rut_info(message, old_msg_id):
     w_id = str(uuid.uuid4())
     withdraws_col.insert_one({"_id": w_id, "user_id": uid, "amount": amt, "info": raw_info, "status": "pending", "time": datetime.now()})
     
-    # 2. TẠO URL VIETQR GỬI ADMIN
     qr_url = f"https://img.vietqr.io/image/{bank_id}-{acc_no}-compact2.png?amount={amt}&accountName={acc_name}&addInfo=ThanhToanRutTien"
     kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("✅ CHUYỂN TIỀN (DUYỆT)", callback_data=f"admw_appr_{w_id}"), types.InlineKeyboardButton("❌ TỪ CHỐI (HOÀN TIỀN)", callback_data=f"admw_reje_{w_id}"))
     
-    admin_text = f"💸 **YÊU CẦU RÚT TIỀN**\n👤 STT: `#{user['stt']}` (ID: `{uid}`)\n💰 Số tiền: **{format_money(amt)}**\n💳 Thông tin: `{raw_info}`\n\n*(Admin hãy quét mã QR ở trên để chuyển khoản tự động)*"
+    admin_text = f"💸 **YÊU CẦU RÚT TIỀN**\n👤 STT: `#{user['stt']}` (ID: `{uid}`)\n💰 Số tiền: **{format_money(amt)}**\n💳 Thông tin: `{raw_info}`\n\n*(Admin quét mã QR ở trên để chuyển khoản tự động)*"
     
-    try:
-        bot.send_photo(ADMIN_ID, photo=qr_url, caption=admin_text, reply_markup=kb, parse_mode='Markdown')
-    except Exception:
-        # Dự phòng trường hợp API lỗi do sai mã ngân hàng
-        bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode='Markdown')
+    try: bot.send_photo(ADMIN_ID, photo=qr_url, caption=admin_text, reply_markup=kb, parse_mode='Markdown')
+    except Exception: bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode='Markdown')
     
     text, m_markup = get_main_menu(get_user(uid))
     bot.edit_message_text(f"✅ Đã gửi yêu cầu rút **{format_money(amt)}** tới hệ thống! Đang chờ duyệt.\n\n{text}", message.chat.id, old_msg_id, reply_markup=m_markup, parse_mode='Markdown')
@@ -621,7 +614,7 @@ def handle_admin_actions(call):
             log_transaction(uid, amt, "Nạp tiền thành công")
             bot.edit_message_caption(f"✅ **ĐÃ DUYỆT CỘNG {format_money(amt)}**\n\n" + m.caption, m.chat.id, m.message_id, parse_mode='Markdown')
             
-            # --- AUTO UPDATE VIP KHI DUYỆT BILL ---
+            # --- AUTO UPDATE VIP ---
             updated_u = users_col.find_one({'_id': uid})
             total_dep = updated_u.get('total_deposited', 0)
             current_vip = updated_u.get('vip', 0)
@@ -657,12 +650,8 @@ def handle_admin_actions(call):
         w = withdraws_col.find_one({"_id": w_id})
         if w and w['status'] == 'pending':
             withdraws_col.update_one({'_id': w_id}, {'$set': {'status': 'approved'}})
-            
-            if m.content_type == 'photo':
-                bot.edit_message_caption(f"✅ **ĐÃ CHUYỂN TIỀN THÀNH CÔNG**\n\n{m.caption}", m.chat.id, m.message_id, parse_mode='Markdown')
-            else:
-                bot.edit_message_text(f"✅ **ĐÃ CHUYỂN TIỀN THÀNH CÔNG**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
-                
+            if m.content_type == 'photo': bot.edit_message_caption(f"✅ **ĐÃ CHUYỂN TIỀN THÀNH CÔNG**\n\n{m.caption}", m.chat.id, m.message_id, parse_mode='Markdown')
+            else: bot.edit_message_text(f"✅ **ĐÃ CHUYỂN TIỀN THÀNH CÔNG**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
             try: bot.send_message(w['user_id'], f"🎉 Rút thành công **{format_money(w['amount'])}**. Tiền đã về tài khoản!", parse_mode='Markdown')
             except: pass
         else: bot.answer_callback_query(call.id, "❌ Đơn này đã xử lý!", show_alert=True)
@@ -674,12 +663,8 @@ def handle_admin_actions(call):
             withdraws_col.update_one({'_id': w_id}, {'$set': {'status': 'rejected'}})
             users_col.update_one({'_id': w['user_id']}, {'$inc': {'balance': w['amount']}}) 
             log_transaction(w['user_id'], w['amount'], "Hoàn tiền rút bị từ chối")
-            
-            if m.content_type == 'photo':
-                bot.edit_message_caption(f"❌ **ĐÃ TỪ CHỐI VÀ HOÀN TIỀN**\n\n{m.caption}", m.chat.id, m.message_id, parse_mode='Markdown')
-            else:
-                bot.edit_message_text(f"❌ **ĐÃ TỪ CHỐI VÀ HOÀN TIỀN**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
-                
+            if m.content_type == 'photo': bot.edit_message_caption(f"❌ **ĐÃ TỪ CHỐI VÀ HOÀN TIỀN**\n\n{m.caption}", m.chat.id, m.message_id, parse_mode='Markdown')
+            else: bot.edit_message_text(f"❌ **ĐÃ TỪ CHỐI VÀ HOÀN TIỀN**\n\n{m.text}", m.chat.id, m.message_id, parse_mode='Markdown')
             try: bot.send_message(w['user_id'], f"⚠️ Yêu cầu rút **{format_money(w['amount'])}** bị từ chối. Số điểm đã hoàn lại vào ví!", parse_mode='Markdown')
             except: pass
         else: bot.answer_callback_query(call.id, "❌ Đơn này đã xử lý!", show_alert=True)
@@ -700,12 +685,7 @@ def handle_admin_actions(call):
                 text = "🎁 **HỆ THỐNG QUẢN LÝ GIFTCODE**\n\n📋 **Danh sách Code đang hoạt động:**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 for c in codes:
                     text += f"🎫 Mã: `{c['_id']}`\n💰 Thưởng: **{format_money(c['reward'])}**\n🔄 Lượt còn lại: **{c['uses_left']}** lượt\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-            
-            kb = types.InlineKeyboardMarkup(row_width=2)
-            kb.add(
-                types.InlineKeyboardButton("➕ TẠO CODE MỚI", callback_data="adm_code_add"),
-                types.InlineKeyboardButton("🗑 XÓA TẤT CẢ", callback_data="adm_code_del_all")
-            )
+            kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("➕ TẠO CODE MỚI", callback_data="adm_code_add"), types.InlineKeyboardButton("🗑 XÓA TẤT CẢ", callback_data="adm_code_del_all"))
             kb.add(get_back_admin_btn().keyboard[0][0])
             bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
             
@@ -720,7 +700,7 @@ def handle_admin_actions(call):
         
         elif act == "adm_mgr":
             kb = types.InlineKeyboardMarkup(row_width=1).add(
-                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"),
+                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"), 
                 types.InlineKeyboardButton("🔍 SOI THÔNG TIN KHÁCH TỪ STT", callback_data="adm_mgr_info"),
                 types.InlineKeyboardButton("📝 XEM LỊCH SỬ CHAT CỦA KHÁCH", callback_data="adm_mgr_logs"),
                 get_back_admin_btn().keyboard[0][0]
@@ -730,20 +710,29 @@ def handle_admin_actions(call):
         elif act == "adm_mgr_list":
             bot.edit_message_text("⏳ Đang xuất dữ liệu từ hệ thống, vui lòng chờ...", m.chat.id, m.message_id)
             try:
-                cursor = users_col.find().sort("_id", 1)
-                text_list = "📋 DANH SÁCH NGƯỜI DÙNG:\n\n"
+                # Sắp xếp theo stt tăng dần
+                cursor = users_col.find().sort("stt", 1)
+                text_list = "📋 DANH SÁCH NGƯỜI DÙNG SỬ DỤNG BOT\n"
+                text_list += "="*50 + "\n\n"
                 count = 0
                 for u in cursor:
                     uname = u.get("username", "Ẩn_danh")
                     bal = u.get("balance", 0)
-                    text_list += f"[{u['stt']}] ID: {u['_id']} | @{uname} | Dư: {format_money(bal)}\n"
+                    tbet = u.get("total_bet", 0)
+                    twon = u.get("total_won", 0)
+                    
+                    text_list += f"STT: #{u['stt']} | ID: {u['_id']} | @{uname}\n"
+                    text_list += f" ├ Số dư hiện tại : {bal:,} VNĐ\n"
+                    text_list += f" ├ Số tiền cược   : {tbet:,} VNĐ\n"
+                    text_list += f" └ Số tiền thắng  : {twon:,} VNĐ\n"
+                    text_list += "-"*50 + "\n"
                     count += 1
                 
                 if count == 0:
                     bot.edit_message_text("📭 Hệ thống chưa có người dùng nào!", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
                 else:
                     bio = BytesIO(text_list.encode('utf-8'))
-                    bot.send_document(m.chat.id, types.InputFile(bio, filename="Danh_sach_user.txt"), caption=f"✅ Đã xuất thành công {count} người dùng.", reply_markup=get_back_admin_btn())
+                    bot.send_document(m.chat.id, types.InputFile(bio, filename="Danh_sach_user.txt"), caption=f"✅ Đã xuất thành công **{count} người dùng**.\n*(Sắp xếp theo STT tăng dần)*", parse_mode='Markdown', reply_markup=get_back_admin_btn())
                     bot.delete_message(m.chat.id, m.message_id)
             except Exception as e:
                 bot.edit_message_text(f"❌ Lỗi: {e}", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
