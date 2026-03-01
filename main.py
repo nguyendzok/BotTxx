@@ -148,12 +148,16 @@ def get_main_menu(user):
         types.InlineKeyboardButton("🌟 ĐẶC QUYỀN VIP", callback_data="u_vip"),
         types.InlineKeyboardButton("👨‍💻 HỖ TRỢ", url="https://t.me/chamayluon")
     )
+    
+    # Ẩn lỗi markdown nếu tên user có dấu _
+    uname = user.get('username', 'user')
     text = (
         "💎 ════════════════════ 💎\n"
         "      🎰 **TAI XIU CASINO PRO** 🎰\n"
         "⚡️ Uy Tín • Nhanh Chóng • Tự Động ⚡️\n"
         "💎 ════════════════════ 💎\n\n"
         "👤 **THÔNG TIN CỦA BẠN:**\n"
+        f"├ 👤 Khách hàng: `@{uname}`\n"
         f"├ 🆔 ID Nạp: `{user['_id']}`\n"
         f"├ 🔢 STT: `#{user['stt']}` | 🌟 VIP: `{user['vip']}`\n"
         f"└ 💰 Số dư:  **{format_money(user['balance'])}**\n\n"
@@ -248,8 +252,9 @@ def handle_user_menus(call):
             total_dep = user.get('total_deposited', 0)
             total_bet = user.get('total_bet', 0)
             total_won = user.get('total_won', 0)
+            uname = user.get('username', 'user')
             text = (
-                f"🔰 **CÁ NHÂN**\n\n👤 Tên: @{user['username']}\n🔢 STT: `#{user['stt']}`\n💰 Dư: **{format_money(user['balance'])}**\n🌟 VIP: `{user['vip']}` (Tỉ lệ ăn: x{rate:.2f})\n"
+                f"🔰 **CÁ NHÂN**\n\n👤 Tên: `@{uname}`\n🔢 STT: `#{user['stt']}`\n💰 Dư: **{format_money(user['balance'])}**\n🌟 VIP: `{user['vip']}` (Tỉ lệ ăn: x{rate:.2f})\n"
                 "〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"💵 Tổng Nạp: **{format_money(total_dep)}**\n🎲 Tổng Cược: **{format_money(total_bet)}**\n🏆 Tổng Thắng: **{format_money(total_won)}**"
             )
@@ -485,8 +490,8 @@ def handle_bill_photo(message):
 
     kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ DUYỆT CỘNG", callback_data=f"admappr_{dep['_id']}"), types.InlineKeyboardButton("❌ TỪ CHỐI", callback_data=f"admreje_{dep['_id']}"))
     user = get_user(uid)
-    uname = f"@{user['username']}" if user.get('username') else "Ẩn danh"
-    cap = f"💳 **CÓ BILL NẠP MỚI**\n👤 User: `{uid}` ({uname})\n💵 Tiền nạp: **{format_money(dep['amount'])}**\n🏷 Nội dung CK: `{dep['content']}`"
+    uname = f"@{user.get('username', 'user')}"
+    cap = f"💳 **CÓ BILL NẠP MỚI**\n👤 User: `{uid}` (`{uname}`)\n💵 Tiền nạp: **{format_money(dep['amount'])}**\n🏷 Nội dung CK: `{dep['content']}`"
     bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=cap, parse_mode="Markdown", reply_markup=kb)
     
     bot.reply_to(message, "✅ **Đã gửi biên lai cho Admin!** Hệ thống sẽ cộng tiền sớm nhất.", parse_mode="Markdown")
@@ -614,7 +619,7 @@ def handle_admin_actions(call):
             log_transaction(uid, amt, "Nạp tiền thành công")
             bot.edit_message_caption(f"✅ **ĐÃ DUYỆT CỘNG {format_money(amt)}**\n\n" + m.caption, m.chat.id, m.message_id, parse_mode='Markdown')
             
-            # --- AUTO UPDATE VIP ---
+            # --- AUTO UPDATE VIP KHI DUYỆT BILL ---
             updated_u = users_col.find_one({'_id': uid})
             total_dep = updated_u.get('total_deposited', 0)
             current_vip = updated_u.get('vip', 0)
@@ -685,7 +690,12 @@ def handle_admin_actions(call):
                 text = "🎁 **HỆ THỐNG QUẢN LÝ GIFTCODE**\n\n📋 **Danh sách Code đang hoạt động:**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 for c in codes:
                     text += f"🎫 Mã: `{c['_id']}`\n💰 Thưởng: **{format_money(c['reward'])}**\n🔄 Lượt còn lại: **{c['uses_left']}** lượt\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-            kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("➕ TẠO CODE MỚI", callback_data="adm_code_add"), types.InlineKeyboardButton("🗑 XÓA TẤT CẢ", callback_data="adm_code_del_all"))
+            
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(
+                types.InlineKeyboardButton("➕ TẠO CODE MỚI", callback_data="adm_code_add"),
+                types.InlineKeyboardButton("🗑 XÓA TẤT CẢ", callback_data="adm_code_del_all")
+            )
             kb.add(get_back_admin_btn().keyboard[0][0])
             bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
             
@@ -698,19 +708,52 @@ def handle_admin_actions(call):
             kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code"))
             bot.edit_message_text("🗑 **Đã xóa toàn bộ mã Giftcode hiện có trong hệ thống!**", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
         
+        # ====================================================
+        # DANH SÁCH USER HIỂN THỊ TRỰC TIẾP LÊN MÀN HÌNH
+        # ====================================================
         elif act == "adm_mgr":
-            kb = types.InlineKeyboardMarkup(row_width=1).add(
-                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"), 
-                types.InlineKeyboardButton("🔍 SOI THÔNG TIN KHÁCH TỪ STT", callback_data="adm_mgr_info"),
+            cursor = users_col.find().sort("stt", 1)
+            count = users_col.count_documents({})
+            text_list = f"👥 **DANH SÁCH {count} NGƯỜI DÙNG:**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+            
+            shown_count = 0
+            for u in cursor:
+                uname = f"@{u.get('username', 'user')}"
+                bal = format_money(u.get('balance', 0))
+                tbet = format_money(u.get('total_bet', 0))
+                twon = format_money(u.get('total_won', 0))
+                
+                # Bọc username trong dấu backtick để chống lỗi Markdown với ký tự _
+                line = f"`#{u['stt']}` | `{uname}` | Dư: {bal} | Cược: {tbet} | Win: {twon}\n"
+                
+                # Telegram giới hạn 4096 ký tự/tin nhắn, nên phải ngắt nếu quá dài
+                if len(text_list) + len(line) > 3500:
+                    text_list += f"\n*... và {count - shown_count} người dùng khác.*"
+                    break
+                    
+                text_list += line
+                shown_count += 1
+            
+            if count == 0:
+                text_list += "📭 Hệ thống chưa có khách hàng nào!\n"
+            
+            text_list += "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n👇 **Chọn chức năng quản lý chi tiết:**"
+            
+            kb = types.InlineKeyboardMarkup(row_width=1)
+            # Nếu danh sách quá dài bị cắt bớt, hiện nút tải File TXT
+            if count > shown_count:
+                kb.add(types.InlineKeyboardButton("📜 XUẤT TOÀN BỘ RA FILE TXT", callback_data="adm_mgr_list"))
+                
+            kb.add(
+                types.InlineKeyboardButton("🔍 SOI THÔNG TIN TỪ STT", callback_data="adm_mgr_info"),
                 types.InlineKeyboardButton("📝 XEM LỊCH SỬ CHAT CỦA KHÁCH", callback_data="adm_mgr_logs"),
                 get_back_admin_btn().keyboard[0][0]
             )
-            bot.edit_message_text("👥 **HỆ THỐNG QUẢN LÝ USER**\n\n👇 Chọn chức năng muốn xem:", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
+            bot.edit_message_text(text_list, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
             
         elif act == "adm_mgr_list":
             bot.edit_message_text("⏳ Đang xuất dữ liệu từ hệ thống, vui lòng chờ...", m.chat.id, m.message_id)
             try:
-                # Sắp xếp theo stt tăng dần
                 cursor = users_col.find().sort("stt", 1)
                 text_list = "📋 DANH SÁCH NGƯỜI DÙNG SỬ DỤNG BOT\n"
                 text_list += "="*50 + "\n\n"
@@ -720,7 +763,6 @@ def handle_admin_actions(call):
                     bal = u.get("balance", 0)
                     tbet = u.get("total_bet", 0)
                     twon = u.get("total_won", 0)
-                    
                     text_list += f"STT: #{u['stt']} | ID: {u['_id']} | @{uname}\n"
                     text_list += f" ├ Số dư hiện tại : {bal:,} VNĐ\n"
                     text_list += f" ├ Số tiền cược   : {tbet:,} VNĐ\n"
@@ -740,9 +782,11 @@ def handle_admin_actions(call):
         elif act == "adm_mgr_info":
             msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_info, m.message_id)
+            
         elif act == "adm_mgr_logs":
             msg = bot.edit_message_text("📝 **MÁY QUAY LÉN LỊCH SỬ CHAT**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_logs, m.message_id)
+            
         elif act == "adm_bc":
             msg = bot.edit_message_text("📢 **THÔNG BÁO**\n⌨️ Nhập nội dung cần gửi:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_bc, m.message_id)
@@ -768,7 +812,7 @@ def process_adm_money_step2(message, old_msg_id):
     temp_data[message.from_user.id]['target_user'] = u
     
     uname = f"@{u['username']}" if u.get('username') else "Không có"
-    text = (f"👤 Đang chọn Khách: **{uname}** (STT: `#{u['stt']}`)\n💰 Số dư hiện tại: **{format_money(u.get('balance', 0))}**\n\n"
+    text = (f"👤 Đang chọn Khách: `{uname}` (STT: `#{u['stt']}`)\n💰 Số dư hiện tại: **{format_money(u.get('balance', 0))}**\n\n"
             "👉 **BƯỚC 2: Nhập số tiền**\n➕ CỘNG TIỀN: Nhập `50k`\n➖ TRỪ TIỀN: Nhập `-50k`\n\n⌨️ Nhập số tiền vào ô chat:")
     bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_money_step3, old_msg_id)
@@ -810,7 +854,7 @@ def process_adm_mgr_info(message, old_msg_id):
     if u:
         uname = f"@{u['username']}" if u.get('username') else "Không có"
         text = (f"👤 **THÔNG TIN KHÁCH HÀNG**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: {uname} | 🌟 VIP: `{u.get('vip', 0)}`\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: `{uname}` | 🌟 VIP: `{u.get('vip', 0)}`\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
                 f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**")
         bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
@@ -826,10 +870,13 @@ def process_adm_mgr_logs(message, old_msg_id):
     if u:
         logs = list(msg_logs_col.find({"uid": u['_id']}).sort("_id", -1).limit(25))
         uname = f"@{u['username']}" if u.get('username') else "Không có"
-        if not logs: text = f"👤 Lịch sử chat của #{u['stt']} ({uname}):\n📭 Chưa có tin nhắn nào!"
+        if not logs: 
+            text = f"👤 Lịch sử chat của `#{u['stt']}` (`{uname}`):\n📭 Chưa có tin nhắn nào!"
         else:
-            text = f"👤 LỊCH SỬ CHAT #{u['stt']} ({uname}):\n\n"
-            for log in reversed(logs): text += f"🕒 `{log.get('time', 'N/A')}`: {log.get('text', '')}\n"
+            text = f"👤 LỊCH SỬ CHAT `#{u['stt']}` (`{uname}`):\n\n```\n"
+            for log in reversed(logs): 
+                text += f"[{log.get('time', 'N/A')}] {log.get('text', '')}\n"
+            text += "```"
         bot.edit_message_text(text[:4000], message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
     else:
         bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
