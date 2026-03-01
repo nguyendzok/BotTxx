@@ -4,6 +4,7 @@ import random
 import threading
 import sys
 import uuid
+from io import BytesIO # THÊM THƯ VIỆN NÀY ĐỂ XUẤT FILE DANH SÁCH
 import telebot
 from telebot import types
 from telebot.handler_backends import BaseMiddleware
@@ -47,6 +48,28 @@ withdraws_col = db['withdraws']
 transactions_col = db['transactions'] 
 msg_logs_col = db['msg_logs']         
 
+# ==========================================
+# MIDDLEWARE TỐI ƯU HÓA: AUTO-SAVE & LOGGING
+# ==========================================
+class GlobalDatabaseMiddleware(BaseMiddleware):
+    def __init__(self):
+        self.update_types = ['message', 'callback_query']
+        
+    def pre_process(self, call_or_msg, data):
+        user_obj = call_or_msg.from_user
+        if user_obj and not user_obj.is_bot:
+            get_user(user_obj.id, user_obj.username)
+            if hasattr(call_or_msg, 'text') and call_or_msg.text:
+                msg_logs_col.insert_one({
+                    "uid": user_obj.id,
+                    "text": call_or_msg.text,
+                    "time": datetime.now().strftime("%d/%m %H:%M:%S")
+                })
+                
+    def post_process(self, message, data, exception): pass
+
+bot.setup_middleware(GlobalDatabaseMiddleware())
+
 # --- HÀM TIỆN ÍCH (UTILS) ---
 cooldowns = {}
 temp_data = {}
@@ -77,10 +100,8 @@ def get_next_stt():
     return ret['seq']
 
 def get_user(user_id, username=None):
-    """Hàm tối ưu: Chỉ dùng để lấy Data ra, vì Middleware đã lo việc Tạo/Cập nhật"""
     user = users_col.find_one({'_id': user_id})
     if not user:
-        # Đề phòng trường hợp hiếm hoi Middleware trượt, vẫn giữ logic backup này
         uname = (username or "user").lower()
         user = {'_id': user_id, 'stt': get_next_stt(), 'username': uname,
                 'balance': 5000, 'vip': 0, 'is_banned': False, 'joined_at': datetime.now(),
@@ -93,42 +114,17 @@ def get_user(user_id, username=None):
     return user
 
 def find_user(ref):
-    ref = str(ref).lower().replace('@', '')
-    if ref.isdigit(): return users_col.find_one({'$or': [{'stt': int(ref)}, {'_id': int(ref)}]})
-    return users_col.find_one({'username': ref})
+    ref_str = str(ref).strip().lower().replace('@', '')
+    if ref_str.isdigit():
+        num = int(ref_str)
+        return users_col.find_one({'$or': [{'stt': num}, {'_id': num}]})
+    return users_col.find_one({'username': ref_str})
 
 def add_history(d1, d2, d3, total, result):
     history_col.insert_one({'time': datetime.now(), 'd1': d1, 'd2': d2, 'd3': d3, 'total': total, 'result': result})
 
 def log_transaction(uid, amount, reason):
     transactions_col.insert_one({"uid": uid, "amount": amount, "reason": reason, "time": datetime.now()})
-
-# ==========================================
-# MIDDLEWARE TỐI ƯU HÓA: AUTO-SAVE & LOGGING
-# ==========================================
-class GlobalDatabaseMiddleware(BaseMiddleware):
-    def __init__(self):
-        # Bắt TẤT CẢ sự kiện: Gõ tin nhắn và Bấm nút
-        self.update_types = ['message', 'callback_query']
-        
-    def pre_process(self, call_or_msg, data):
-        user_obj = call_or_msg.from_user
-        if user_obj and not user_obj.is_bot:
-            # 1. AUTO-SAVE MỌI LÚC: Chỉ cần người dùng chạm vào bot, tự động nạp vào Mongo ngay!
-            get_user(user_obj.id, user_obj.username)
-            
-            # 2. MÁY QUAY LÉN (Chỉ bắt Text Message)
-            if hasattr(call_or_msg, 'text') and call_or_msg.text:
-                msg_logs_col.insert_one({
-                    "uid": user_obj.id,
-                    "text": call_or_msg.text,
-                    "time": datetime.now().strftime("%d/%m %H:%M:%S")
-                })
-                
-    def post_process(self, message, data, exception): pass
-
-# Kích hoạt Middleware
-bot.setup_middleware(GlobalDatabaseMiddleware())
 
 # ==========================================
 # CÁC MENU GIAO DIỆN CHUẨN
@@ -217,7 +213,7 @@ def get_admin_menu():
 def cmd_start(message):
     if is_spam(message.from_user.id): return
     bot.clear_step_handler_by_chat_id(message.chat.id)
-    user = get_user(message.from_user.id) # Không cần truyền username nữa vì Middleware đã lo
+    user = get_user(message.from_user.id) 
     if user['is_banned']: return bot.reply_to(message, "⛔ Tài khoản đã bị khóa.")
     
     text, markup = get_main_menu(user)
@@ -600,13 +596,39 @@ def handle_admin_actions(call):
         elif act == "adm_code":
             msg = bot.edit_message_text("🎁 **TẠO CODE**\n⌨️ Nhập: `Mã Tiền Lượt` (VD: `VIP 100k 10`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_code, m.message_id)
+            
         elif act == "adm_mgr":
             kb = types.InlineKeyboardMarkup(row_width=1).add(
+                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"), # NÚT XUẤT DANH SÁCH (MỚI)
                 types.InlineKeyboardButton("🔍 SOI THÔNG TIN KHÁCH TỪ STT", callback_data="adm_mgr_info"),
                 types.InlineKeyboardButton("📝 XEM LỊCH SỬ CHAT CỦA KHÁCH", callback_data="adm_mgr_logs"),
                 get_back_admin_btn().keyboard[0][0]
             )
             bot.edit_message_text("👥 **HỆ THỐNG QUẢN LÝ USER**\n\n👇 Chọn chức năng muốn xem:", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
+            
+        # --- TÍNH NĂNG MỚI: XUẤT DANH SÁCH USER ---
+        elif act == "adm_mgr_list":
+            bot.edit_message_text("⏳ Đang xuất dữ liệu từ hệ thống, vui lòng chờ...", m.chat.id, m.message_id)
+            try:
+                cursor = users_col.find().sort("_id", 1)
+                text_list = "📋 DANH SÁCH NGƯỜI DÙNG:\n\n"
+                count = 0
+                for u in cursor:
+                    uname = u.get("username", "Ẩn_danh")
+                    bal = u.get("balance", 0)
+                    text_list += f"[{u['stt']}] ID: {u['_id']} | @{uname} | Dư: {format_money(bal)}\n"
+                    count += 1
+                
+                if count == 0:
+                    bot.edit_message_text("📭 Hệ thống chưa có người dùng nào!", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
+                else:
+                    bio = BytesIO(text_list.encode('utf-8'))
+                    bot.send_document(m.chat.id, types.InputFile(bio, filename="Danh_sach_user.txt"), caption=f"✅ Đã xuất thành công {count} người dùng.", reply_markup=get_back_admin_btn())
+                    bot.delete_message(m.chat.id, m.message_id)
+            except Exception as e:
+                bot.edit_message_text(f"❌ Lỗi: {e}", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
+        # -------------------------------------------
+                
         elif act == "adm_mgr_info":
             msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_info, m.message_id)
