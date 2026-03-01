@@ -4,7 +4,7 @@ import random
 import threading
 import sys
 import uuid
-from io import BytesIO # THÊM THƯ VIỆN NÀY ĐỂ XUẤT FILE DANH SÁCH
+from io import BytesIO 
 import telebot
 from telebot import types
 from telebot.handler_backends import BaseMiddleware
@@ -200,7 +200,8 @@ def get_withdraw_kb():
 
 def get_admin_menu():
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(types.InlineKeyboardButton("💰 CỘNG TRỪ TIỀN", callback_data="adm_money_step1"), types.InlineKeyboardButton("🎁 TẠO CODE", callback_data="adm_code"))
+    # ĐỔI TÊN NÚT THÀNH QUẢN LÝ CODE
+    kb.add(types.InlineKeyboardButton("💰 CỘNG TRỪ TIỀN", callback_data="adm_money_step1"), types.InlineKeyboardButton("🎁 QUẢN LÝ CODE", callback_data="adm_code"))
     kb.add(types.InlineKeyboardButton("👥 QUẢN LÝ USER", callback_data="adm_mgr"), types.InlineKeyboardButton("📢 THÔNG BÁO", callback_data="adm_bc"))
     kb.add(types.InlineKeyboardButton("🌟 SET VIP", callback_data="adm_vip"), types.InlineKeyboardButton("🚫 BAN/UNBAN", callback_data="adm_ban"))
     return "⚙ **BẢNG ĐIỀU KHIỂN DÀNH CHO ADMIN**\n\n👇 Hãy chọn chức năng bên dưới:", kb
@@ -370,15 +371,17 @@ def process_giftcode(message, old_msg_id):
     c_name = message.text.strip().upper()
     code = codes_col.find_one({'_id': c_name})
     
+    # KIỂM TRA: Nếu sai code, hoặc hết lượt, hoặc ID người dùng ĐÃ TỒN TẠI trong mảng used_by -> Chặn
     if not code or code['uses_left'] <= 0 or user['_id'] in code['used_by']:
-        bot.edit_message_text("❌ Mã sai hoặc hết lượt!\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+        bot.edit_message_text("❌ Mã code sai, đã hết lượt, hoặc bạn **ĐÃ SỬ DỤNG** mã này rồi!\n⌨️ **Nhập lại mã khác:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_giftcode, old_msg_id)
         return
         
+    # Cập nhật: Trừ đi 1 lượt sử dụng và Đẩy ID người dùng vào mảng used_by
     users_col.update_one({'_id': user['_id']}, {'$inc': {'balance': code['reward']}})
     codes_col.update_one({'_id': c_name}, {'$inc': {'uses_left': -1}, '$push': {'used_by': user['_id']}})
     log_transaction(user['_id'], code['reward'], f"Nhập Code {c_name}")
-    bot.edit_message_text(f"🎁 **NHẬP CODE THÀNH CÔNG!**\nNhận được: **{format_money(code['reward'])}**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+    bot.edit_message_text(f"🎁 **NHẬP CODE THÀNH CÔNG!**\nBạn nhận được: **{format_money(code['reward'])}**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
 
 # ==========================================
 # NẠP TIỀN & RÚT TIỀN 
@@ -593,20 +596,45 @@ def handle_admin_actions(call):
         elif act == "adm_money_step1":
             msg = bot.edit_message_text("💰 **CỘNG/TRỪ TIỀN KHÁCH HÀNG**\n👉 **BƯỚC 1:** Nhập `STT`, `ID` hoặc `@Username` của khách:\n*(VD: 1 hoặc @nguyenvana)*", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_money_step2, m.message_id)
+            
+        # ==========================================
+        # DASHBOARD QUẢN LÝ GIFTCODE (MỚI)
+        # ==========================================
         elif act == "adm_code":
-            msg = bot.edit_message_text("🎁 **TẠO CODE**\n⌨️ Nhập: `Mã Tiền Lượt` (VD: `VIP 100k 10`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            codes = list(codes_col.find())
+            if not codes:
+                text = "🎁 **HỆ THỐNG QUẢN LÝ GIFTCODE**\n\n📭 Hiện tại chưa có mã Code nào đang hoạt động."
+            else:
+                text = "🎁 **HỆ THỐNG QUẢN LÝ GIFTCODE**\n\n📋 **Danh sách Code đang hoạt động:**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                for c in codes:
+                    text += f"🎫 Mã: `{c['_id']}`\n💰 Thưởng: **{format_money(c['reward'])}**\n🔄 Lượt còn lại: **{c['uses_left']}** lượt\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+            
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(
+                types.InlineKeyboardButton("➕ TẠO CODE MỚI", callback_data="adm_code_add"),
+                types.InlineKeyboardButton("🗑 XÓA TẤT CẢ", callback_data="adm_code_del_all")
+            )
+            kb.add(get_back_admin_btn().keyboard[0][0])
+            bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
+            
+        elif act == "adm_code_add":
+            msg = bot.edit_message_text("🎁 **TẠO MÃ GIFTCODE MỚI**\n\n⌨️ Nhập theo cú pháp: `Mã Tiền Lượt`\n*(VD: `VIP100 100k 10`)*\n\n⚠️ *Lưu ý: Mã code viết liền không dấu.*", m.chat.id, m.message_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 HỦY BỎ", callback_data="adm_code")), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_code, m.message_id)
             
+        elif act == "adm_code_del_all":
+            codes_col.delete_many({})
+            kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code"))
+            bot.edit_message_text("🗑 **Đã xóa toàn bộ mã Giftcode hiện có trong hệ thống!**", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
+        # ==========================================
+        
         elif act == "adm_mgr":
             kb = types.InlineKeyboardMarkup(row_width=1).add(
-                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"), # NÚT XUẤT DANH SÁCH (MỚI)
+                types.InlineKeyboardButton("📜 XUẤT DANH SÁCH USER", callback_data="adm_mgr_list"),
                 types.InlineKeyboardButton("🔍 SOI THÔNG TIN KHÁCH TỪ STT", callback_data="adm_mgr_info"),
                 types.InlineKeyboardButton("📝 XEM LỊCH SỬ CHAT CỦA KHÁCH", callback_data="adm_mgr_logs"),
                 get_back_admin_btn().keyboard[0][0]
             )
             bot.edit_message_text("👥 **HỆ THỐNG QUẢN LÝ USER**\n\n👇 Chọn chức năng muốn xem:", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
-            
-        # --- TÍNH NĂNG MỚI: XUẤT DANH SÁCH USER ---
         elif act == "adm_mgr_list":
             bot.edit_message_text("⏳ Đang xuất dữ liệu từ hệ thống, vui lòng chờ...", m.chat.id, m.message_id)
             try:
@@ -618,17 +646,12 @@ def handle_admin_actions(call):
                     bal = u.get("balance", 0)
                     text_list += f"[{u['stt']}] ID: {u['_id']} | @{uname} | Dư: {format_money(bal)}\n"
                     count += 1
-                
-                if count == 0:
-                    bot.edit_message_text("📭 Hệ thống chưa có người dùng nào!", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
+                if count == 0: bot.edit_message_text("📭 Hệ thống chưa có người dùng nào!", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
                 else:
                     bio = BytesIO(text_list.encode('utf-8'))
                     bot.send_document(m.chat.id, types.InputFile(bio, filename="Danh_sach_user.txt"), caption=f"✅ Đã xuất thành công {count} người dùng.", reply_markup=get_back_admin_btn())
                     bot.delete_message(m.chat.id, m.message_id)
-            except Exception as e:
-                bot.edit_message_text(f"❌ Lỗi: {e}", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
-        # -------------------------------------------
-                
+            except Exception as e: bot.edit_message_text(f"❌ Lỗi: {e}", m.chat.id, m.message_id, reply_markup=get_back_admin_btn())
         elif act == "adm_mgr_info":
             msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_info, m.message_id)
@@ -734,10 +757,12 @@ def process_adm_code(message, old_msg_id):
         n, m, l = message.text.split()
         amt = parse_money(m)
         codes_col.update_one({'_id': n.upper()}, {'$set': {'reward': amt, 'uses_left': int(l), 'used_by': []}}, upsert=True)
-        text, markup = get_admin_menu()
-        bot.edit_message_text(f"🎁 Code `{n.upper()}`: {format_money(amt)} ({l} lượt) đã tạo!\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
+        
+        # Sửa thành quay lại Bảng Code
+        kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code"))
+        bot.edit_message_text(f"✅ Đã tạo thành công Code `{n.upper()}`!\n💰 Trị giá: {format_money(amt)}\n🔄 Số lượt: {l}", message.chat.id, old_msg_id, reply_markup=kb, parse_mode='Markdown')
     except:
-        bot.edit_message_text("❌ Lỗi cú pháp!\n⌨️ Nhập lại (VD: `KM100 100k 10`):", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+        bot.edit_message_text("❌ Lỗi cú pháp!\n⌨️ Nhập lại (VD: `KM100 100k 10`):", message.chat.id, old_msg_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code")), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_code, old_msg_id)
 
 def process_adm_bc(message, old_msg_id):
