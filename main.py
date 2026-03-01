@@ -46,10 +46,9 @@ history_col = db['history']
 deposits_col = db['deposits']
 withdraws_col = db['withdraws']
 transactions_col = db['transactions'] 
-msg_logs_col = db['msg_logs']         
 
 # ==========================================
-# MIDDLEWARE TỐI ƯU HÓA: AUTO-SAVE & LOGGING
+# MIDDLEWARE TỐI ƯU HÓA: CHỈ AUTO-SAVE KHÁCH HÀNG
 # ==========================================
 class GlobalDatabaseMiddleware(BaseMiddleware):
     def __init__(self):
@@ -59,12 +58,6 @@ class GlobalDatabaseMiddleware(BaseMiddleware):
         user_obj = call_or_msg.from_user
         if user_obj and not user_obj.is_bot:
             get_user(user_obj.id, user_obj.username)
-            if hasattr(call_or_msg, 'text') and call_or_msg.text:
-                msg_logs_col.insert_one({
-                    "uid": user_obj.id,
-                    "text": call_or_msg.text,
-                    "time": datetime.now().strftime("%d/%m %H:%M:%S")
-                })
                 
     def post_process(self, message, data, exception): pass
 
@@ -149,7 +142,6 @@ def get_main_menu(user):
         types.InlineKeyboardButton("👨‍💻 HỖ TRỢ", url="https://t.me/chamayluon")
     )
     
-    # Ẩn lỗi markdown nếu tên user có dấu _
     uname = user.get('username', 'user')
     text = (
         "💎 ════════════════════ 💎\n"
@@ -200,8 +192,9 @@ def get_deposit_kb():
 
 def get_withdraw_kb():
     kb = types.InlineKeyboardMarkup(row_width=3)
-    kb.add(types.InlineKeyboardButton("100k", callback_data="rut_100000"), types.InlineKeyboardButton("200k", callback_data="rut_200000"), types.InlineKeyboardButton("500k", callback_data="rut_500000"),
-           types.InlineKeyboardButton("1M", callback_data="rut_1000000"), types.InlineKeyboardButton("2M", callback_data="rut_2000000"), types.InlineKeyboardButton("5M", callback_data="rut_5000000"))
+    # BỎ NÚT 100K, THÊM NÚT 10M CHO ĐỦ MIN RÚT 200K
+    kb.add(types.InlineKeyboardButton("200k", callback_data="rut_200000"), types.InlineKeyboardButton("500k", callback_data="rut_500000"), types.InlineKeyboardButton("1M", callback_data="rut_1000000"),
+           types.InlineKeyboardButton("2M", callback_data="rut_2000000"), types.InlineKeyboardButton("5M", callback_data="rut_5000000"), types.InlineKeyboardButton("10M", callback_data="rut_10000000"))
     kb.add(types.InlineKeyboardButton("✍️ SỐ TIỀN KHÁC", callback_data="rut_custom"))
     kb.add(types.InlineKeyboardButton("🏠 VỀ TRANG CHỦ", callback_data="u_main"))
     return kb
@@ -309,7 +302,7 @@ def handle_user_menus(call):
             if total_bet < req_bet:
                 bot.edit_message_text(f"💸 **HỆ THỐNG RÚT TIỀN**\n\n❌ **BẠN CHƯA ĐỦ ĐIỀU KIỆN RÚT TIỀN!**\n*(Yêu cầu phải đạt vòng cược 150% tổng nạp)*\n\n💵 Tổng nạp: **{format_money(total_dep)}**\n🎲 Vòng cược: **{format_money(total_bet)}** / **{format_money(req_bet)}**\n\n👉 **Còn thiếu:** Bạn cần cược thêm **{format_money(req_bet - total_bet)}** nữa!", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
             else:
-                bot.edit_message_text(f"💸 **HỆ THỐNG RÚT TIỀN**\nSố dư khả dụng: **{format_money(user['balance'])}**\n\n👉 Chọn số tiền muốn rút (Tối thiểu 100k):", m.chat.id, m.message_id, reply_markup=get_withdraw_kb(), parse_mode='Markdown')
+                bot.edit_message_text(f"💸 **HỆ THỐNG RÚT TIỀN**\nSố dư khả dụng: **{format_money(user['balance'])}**\n\n👉 Chọn số tiền muốn rút (Tối thiểu 200k):", m.chat.id, m.message_id, reply_markup=get_withdraw_kb(), parse_mode='Markdown')
 
         elif act == "u_code":
             msg = bot.edit_message_text("🎁 **NHẬP GIFTCODE**\n\n⌨️ **Hãy nhập mã code của bạn:**", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
@@ -512,11 +505,11 @@ def handle_withdraw_calls(call):
     if total_bet < req_bet: return bot.answer_callback_query(call.id, f"❌ Chưa đủ điều kiện! Bạn cần cược thêm {format_money(req_bet - total_bet)}", show_alert=True)
     
     if act == "rut_custom":
-        msg = bot.edit_message_text(f"⌨️ **NHẬP SỐ TIỀN MUỐN RÚT:**\n*(Min 100k, Dư: {format_money(user['balance'])})*", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+        msg = bot.edit_message_text(f"⌨️ **NHẬP SỐ TIỀN MUỐN RÚT:**\n*(Min 200k, Dư: {format_money(user['balance'])})*", m.chat.id, m.message_id, reply_markup=get_back_btn(), parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_rut_custom, m.message_id)
     elif act.startswith("rut_"):
         amt = int(act.split("_")[1])
-        if amt < 100000 or amt > user['balance']: return bot.answer_callback_query(call.id, "❌ Không đủ số dư!", show_alert=True)
+        if amt < 200000 or amt > user['balance']: return bot.answer_callback_query(call.id, "❌ Không đủ số dư hoặc dưới mức tối thiểu!", show_alert=True)
             
         if uid not in temp_data: temp_data[uid] = {}
         temp_data[uid]['amount'] = amt
@@ -536,8 +529,8 @@ def process_rut_custom(message, old_msg_id):
     amt = parse_money(message.text)
     user = get_user(message.from_user.id)
     
-    if amt < 100000 or amt > user['balance']:
-        bot.edit_message_text(f"❌ Số tiền không hợp lệ! (Min 100k, Dư: {format_money(user['balance'])})\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
+    if amt < 200000 or amt > user['balance']:
+        bot.edit_message_text(f"❌ Số tiền không hợp lệ! (Min 200k, Dư: {format_money(user['balance'])})\n⌨️ **Nhập lại:**", message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_rut_custom, old_msg_id)
         return
         
@@ -571,7 +564,7 @@ def process_rut_info(message, old_msg_id):
     acc_no = info_parts[1]
     acc_name = " ".join(info_parts[2:]).upper().replace(' ', '%20')
     
-    if amt < 100000 or amt > user['balance']:
+    if amt < 200000 or amt > user['balance']:
         text, markup = get_main_menu(user)
         return bot.edit_message_text(f"❌ Có lỗi xảy ra. Đã hủy lệnh rút!\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
 
@@ -709,7 +702,7 @@ def handle_admin_actions(call):
             bot.edit_message_text("🗑 **Đã xóa toàn bộ mã Giftcode hiện có trong hệ thống!**", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
         
         # ====================================================
-        # DANH SÁCH USER HIỂN THỊ TRỰC TIẾP LÊN MÀN HÌNH
+        # DANH SÁCH USER VÀ TÌM KIẾM
         # ====================================================
         elif act == "adm_mgr":
             cursor = users_col.find().sort("stt", 1)
@@ -723,10 +716,8 @@ def handle_admin_actions(call):
                 tbet = format_money(u.get('total_bet', 0))
                 twon = format_money(u.get('total_won', 0))
                 
-                # Bọc username trong dấu backtick để chống lỗi Markdown với ký tự _
                 line = f"`#{u['stt']}` | `{uname}` | Dư: {bal} | Cược: {tbet} | Win: {twon}\n"
                 
-                # Telegram giới hạn 4096 ký tự/tin nhắn, nên phải ngắt nếu quá dài
                 if len(text_list) + len(line) > 3500:
                     text_list += f"\n*... và {count - shown_count} người dùng khác.*"
                     break
@@ -740,13 +731,11 @@ def handle_admin_actions(call):
             text_list += "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n👇 **Chọn chức năng quản lý chi tiết:**"
             
             kb = types.InlineKeyboardMarkup(row_width=1)
-            # Nếu danh sách quá dài bị cắt bớt, hiện nút tải File TXT
             if count > shown_count:
                 kb.add(types.InlineKeyboardButton("📜 XUẤT TOÀN BỘ RA FILE TXT", callback_data="adm_mgr_list"))
                 
             kb.add(
                 types.InlineKeyboardButton("🔍 SOI THÔNG TIN TỪ STT", callback_data="adm_mgr_info"),
-                types.InlineKeyboardButton("📝 XEM LỊCH SỬ CHAT CỦA KHÁCH", callback_data="adm_mgr_logs"),
                 get_back_admin_btn().keyboard[0][0]
             )
             bot.edit_message_text(text_list, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
@@ -782,10 +771,6 @@ def handle_admin_actions(call):
         elif act == "adm_mgr_info":
             msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_info, m.message_id)
-            
-        elif act == "adm_mgr_logs":
-            msg = bot.edit_message_text("📝 **MÁY QUAY LÉN LỊCH SỬ CHAT**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-            bot.register_next_step_handler(msg, process_adm_mgr_logs, m.message_id)
             
         elif act == "adm_bc":
             msg = bot.edit_message_text("📢 **THÔNG BÁO**\n⌨️ Nhập nội dung cần gửi:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
@@ -861,26 +846,6 @@ def process_adm_mgr_info(message, old_msg_id):
     else:
         bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_mgr_info, old_msg_id)
-
-def process_adm_mgr_logs(message, old_msg_id):
-    try: bot.delete_message(message.chat.id, message.message_id)
-    except: pass
-    ref = message.text.strip()
-    u = find_user(ref)
-    if u:
-        logs = list(msg_logs_col.find({"uid": u['_id']}).sort("_id", -1).limit(25))
-        uname = f"@{u['username']}" if u.get('username') else "Không có"
-        if not logs: 
-            text = f"👤 Lịch sử chat của `#{u['stt']}` (`{uname}`):\n📭 Chưa có tin nhắn nào!"
-        else:
-            text = f"👤 LỊCH SỬ CHAT `#{u['stt']}` (`{uname}`):\n\n```\n"
-            for log in reversed(logs): 
-                text += f"[{log.get('time', 'N/A')}] {log.get('text', '')}\n"
-            text += "```"
-        bot.edit_message_text(text[:4000], message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-    else:
-        bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-        bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_mgr_logs, old_msg_id)
 
 def process_adm_code(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
