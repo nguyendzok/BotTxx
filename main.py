@@ -593,8 +593,19 @@ def process_rut_info(message, old_msg_id):
     # Delay 1.5s để cảm giác tiến trình đang load
     time.sleep(1.5)
     
-    text, m_markup = get_main_menu(get_user(uid))
-    bot.edit_message_text(f"✅ **Đã gửi yêu cầu rút {format_money(amt)} tới hệ thống!**\n⏳ Vui lòng chờ Admin duyệt và chuyển tiền.\n\n{text}", message.chat.id, old_msg_id, reply_markup=m_markup, parse_mode='Markdown')
+    # ---------------- PANEL BIÊN LAI RÚT TIỀN ----------------
+    updated_user = get_user(uid) # Lấy data mới nhất để hiển thị số dư chính xác
+    panel_text = (
+        f"✅ **YÊU CẦU RÚT TIỀN ĐÃ ĐƯỢC GỬI!**\n"
+        f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+        f"💸 Số tiền rút: **{format_money(amt)}**\n"
+        f"💳 Nhận tiền tại: `{raw_info}`\n"
+        f"⏳ Trạng thái: **Đang chờ Admin duyệt**\n"
+        f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+        f"💰 **Số dư còn lại của bạn:** **{format_money(updated_user['balance'])}**\n\n"
+        f"👉 *Vui lòng kiên nhẫn chờ đợi, tiền sẽ sớm được chuyển vào tài khoản của bạn!*"
+    )
+    bot.edit_message_text(panel_text, message.chat.id, old_msg_id, reply_markup=get_back_btn(), parse_mode='Markdown')
 
 # ==========================================
 # ADMIN MENU QUẢN TRỊ 
@@ -904,7 +915,7 @@ def process_adm_code(message, old_msg_id):
         codes_col.update_one({'_id': n.upper()}, {'$set': {'reward': amt, 'uses_left': int(l), 'used_by': []}}, upsert=True)
         
         kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code"))
-        bot.edit_message_text(f"✅ Đã tạo thành công Code `{n.upper()}`!\n💰 Trị giá: {format_money(amt)}\n🔄 Số lượt: {l}", message.chat.id, old_msg_id, reply_markup=kb, parse_mode='Markdown')
+        bot.edit_message_text(f"✅ Đã tạo thành Code `{n.upper()}`!\n💰 Trị giá: {format_money(amt)}\n🔄 Số lượt: {l}", message.chat.id, old_msg_id, reply_markup=kb, parse_mode='Markdown')
     except:
         bot.edit_message_text("❌ Lỗi cú pháp!\n⌨️ Nhập lại (VD: `KM100 100k 10`):", message.chat.id, old_msg_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code")), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_code, old_msg_id)
