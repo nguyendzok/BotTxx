@@ -44,25 +44,8 @@ codes_col = db['codes']
 history_col = db['history']
 deposits_col = db['deposits']
 withdraws_col = db['withdraws']
-transactions_col = db['transactions'] # Lịch sử biến động số dư
-msg_logs_col = db['msg_logs']         # Máy quay lén tin nhắn
-
-# ==========================================
-# MIDDLEWARE MÁY QUAY LÉN (LOG TIN NHẮN)
-# ==========================================
-class MessageLoggerMiddleware(BaseMiddleware):
-    def __init__(self):
-        self.update_types = ['message']
-    def pre_process(self, message, data):
-        if message.text and not message.from_user.is_bot:
-            msg_logs_col.insert_one({
-                "uid": message.from_user.id,
-                "text": message.text,
-                "time": datetime.now().strftime("%d/%m %H:%M:%S")
-            })
-    def post_process(self, message, data, exception): pass
-
-bot.setup_middleware(MessageLoggerMiddleware())
+transactions_col = db['transactions'] 
+msg_logs_col = db['msg_logs']         
 
 # --- HÀM TIỆN ÍCH (UTILS) ---
 cooldowns = {}
@@ -94,9 +77,12 @@ def get_next_stt():
     return ret['seq']
 
 def get_user(user_id, username=None):
+    """Hàm tối ưu: Chỉ dùng để lấy Data ra, vì Middleware đã lo việc Tạo/Cập nhật"""
     user = users_col.find_one({'_id': user_id})
     if not user:
-        user = {'_id': user_id, 'stt': get_next_stt(), 'username': (username or "user").lower(),
+        # Đề phòng trường hợp hiếm hoi Middleware trượt, vẫn giữ logic backup này
+        uname = (username or "user").lower()
+        user = {'_id': user_id, 'stt': get_next_stt(), 'username': uname,
                 'balance': 5000, 'vip': 0, 'is_banned': False, 'joined_at': datetime.now(),
                 'total_deposited': 0, 'total_bet': 0, 'total_won': 0}
         users_col.insert_one(user)
@@ -116,6 +102,33 @@ def add_history(d1, d2, d3, total, result):
 
 def log_transaction(uid, amount, reason):
     transactions_col.insert_one({"uid": uid, "amount": amount, "reason": reason, "time": datetime.now()})
+
+# ==========================================
+# MIDDLEWARE TỐI ƯU HÓA: AUTO-SAVE & LOGGING
+# ==========================================
+class GlobalDatabaseMiddleware(BaseMiddleware):
+    def __init__(self):
+        # Bắt TẤT CẢ sự kiện: Gõ tin nhắn và Bấm nút
+        self.update_types = ['message', 'callback_query']
+        
+    def pre_process(self, call_or_msg, data):
+        user_obj = call_or_msg.from_user
+        if user_obj and not user_obj.is_bot:
+            # 1. AUTO-SAVE MỌI LÚC: Chỉ cần người dùng chạm vào bot, tự động nạp vào Mongo ngay!
+            get_user(user_obj.id, user_obj.username)
+            
+            # 2. MÁY QUAY LÉN (Chỉ bắt Text Message)
+            if hasattr(call_or_msg, 'text') and call_or_msg.text:
+                msg_logs_col.insert_one({
+                    "uid": user_obj.id,
+                    "text": call_or_msg.text,
+                    "time": datetime.now().strftime("%d/%m %H:%M:%S")
+                })
+                
+    def post_process(self, message, data, exception): pass
+
+# Kích hoạt Middleware
+bot.setup_middleware(GlobalDatabaseMiddleware())
 
 # ==========================================
 # CÁC MENU GIAO DIỆN CHUẨN
@@ -191,10 +204,9 @@ def get_withdraw_kb():
 
 def get_admin_menu():
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(types.InlineKeyboardButton("💰 CỘNG TIỀN", callback_data="adm_add"), types.InlineKeyboardButton("➖ TRỪ TIỀN", callback_data="adm_sub"))
-    kb.add(types.InlineKeyboardButton("🎁 TẠO CODE", callback_data="adm_code"), types.InlineKeyboardButton("👥 QUẢN LÝ USER", callback_data="adm_mgr"))
-    kb.add(types.InlineKeyboardButton("📢 THÔNG BÁO", callback_data="adm_bc"), types.InlineKeyboardButton("🌟 SET VIP", callback_data="adm_vip"))
-    kb.add(types.InlineKeyboardButton("🚫 BAN/UNBAN", callback_data="adm_ban"))
+    kb.add(types.InlineKeyboardButton("💰 CỘNG TRỪ TIỀN", callback_data="adm_money_step1"), types.InlineKeyboardButton("🎁 TẠO CODE", callback_data="adm_code"))
+    kb.add(types.InlineKeyboardButton("👥 QUẢN LÝ USER", callback_data="adm_mgr"), types.InlineKeyboardButton("📢 THÔNG BÁO", callback_data="adm_bc"))
+    kb.add(types.InlineKeyboardButton("🌟 SET VIP", callback_data="adm_vip"), types.InlineKeyboardButton("🚫 BAN/UNBAN", callback_data="adm_ban"))
     return "⚙ **BẢNG ĐIỀU KHIỂN DÀNH CHO ADMIN**\n\n👇 Hãy chọn chức năng bên dưới:", kb
 
 # ==========================================
@@ -205,7 +217,7 @@ def get_admin_menu():
 def cmd_start(message):
     if is_spam(message.from_user.id): return
     bot.clear_step_handler_by_chat_id(message.chat.id)
-    user = get_user(message.from_user.id, message.from_user.username)
+    user = get_user(message.from_user.id) # Không cần truyền username nữa vì Middleware đã lo
     if user['is_banned']: return bot.reply_to(message, "⛔ Tài khoản đã bị khóa.")
     
     text, markup = get_main_menu(user)
@@ -316,26 +328,21 @@ def process_play_custom_amount(message, old_msg_id):
 def execute_bet(message, uid, bet, side, old_msg_id):
     user = get_user(uid)
     
-    # 1. Trừ tiền và cập nhật vòng cược, lưu LOG
     users_col.update_one({'_id': uid}, {'$inc': {'balance': -bet, 'total_bet': bet}})
     log_transaction(uid, -bet, f"Cược {side}")
     
-    # 2. Xóa Menu cũ
     try: bot.delete_message(message.chat.id, old_msg_id)
     except: pass
 
-    # 3. TỰ ĐỘNG XÓA XÚC XẮC CŨ
     old_dice_msgs = temp_data.get(uid, {}).get('dice_msgs', [])
     for msg_id in old_dice_msgs:
         try: bot.delete_message(message.chat.id, msg_id)
         except: pass
 
-    # 4. Gửi 3 xúc xắc Animation mới
     d1_msg = bot.send_dice(message.chat.id, emoji='🎲')
     d2_msg = bot.send_dice(message.chat.id, emoji='🎲')
     d3_msg = bot.send_dice(message.chat.id, emoji='🎲')
     
-    # 5. LƯU ID CỦA 3 VIÊN NÀY LẠI ĐỂ VÁN SAU XÓA
     if uid not in temp_data: temp_data[uid] = {}
     temp_data[uid]['dice_msgs'] = [d1_msg.message_id, d2_msg.message_id, d3_msg.message_id]
     
@@ -457,7 +464,6 @@ def handle_bill_photo(message):
     bot.reply_to(message, "✅ **Đã gửi biên lai cho Admin!** Hệ thống sẽ cộng tiền sớm nhất.", parse_mode="Markdown")
     text, menu = get_main_menu(user)
     bot.send_message(message.chat.id, text, reply_markup=menu, parse_mode='Markdown')
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rut_'))
 def handle_withdraw_calls(call):
@@ -588,12 +594,9 @@ def handle_admin_actions(call):
         if act == "adm_main":
             text, markup = get_admin_menu()
             bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=markup, parse_mode='Markdown')
-        elif act == "adm_add":
-            msg = bot.edit_message_text("💰 **CỘNG TIỀN KHÁCH**\n⌨️ Nhập: `STT/ID SốTiền` (VD: `1 50k`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-            bot.register_next_step_handler(msg, process_adm_money, m.message_id, True)
-        elif act == "adm_sub":
-            msg = bot.edit_message_text("➖ **TRỪ TIỀN KHÁCH**\n⌨️ Nhập: `STT/ID SốTiền` (VD: `1 10k`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-            bot.register_next_step_handler(msg, process_adm_money, m.message_id, False)
+        elif act == "adm_money_step1":
+            msg = bot.edit_message_text("💰 **CỘNG/TRỪ TIỀN KHÁCH HÀNG**\n👉 **BƯỚC 1:** Nhập `STT`, `ID` hoặc `@Username` của khách:\n*(VD: 1 hoặc @nguyenvana)*", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            bot.register_next_step_handler(msg, process_adm_money_step2, m.message_id)
         elif act == "adm_code":
             msg = bot.edit_message_text("🎁 **TẠO CODE**\n⌨️ Nhập: `Mã Tiền Lượt` (VD: `VIP 100k 10`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_code, m.message_id)
@@ -604,14 +607,12 @@ def handle_admin_actions(call):
                 get_back_admin_btn().keyboard[0][0]
             )
             bot.edit_message_text("👥 **HỆ THỐNG QUẢN LÝ USER**\n\n👇 Chọn chức năng muốn xem:", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
-        
         elif act == "adm_mgr_info":
-            msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:\n*(VD: 1 hoặc @nguyenvana)*", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            msg = bot.edit_message_text("👥 **XEM THÔNG TIN USER**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_info, m.message_id)
         elif act == "adm_mgr_logs":
-            msg = bot.edit_message_text("📝 **MÁY QUAY LÉN LỊCH SỬ CHAT**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:\n*(VD: 1 hoặc @nguyenvana)*", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            msg = bot.edit_message_text("📝 **MÁY QUAY LÉN LỊCH SỬ CHAT**\n\n⌨️ Nhập `STT` hoặc `Username` của khách:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_mgr_logs, m.message_id)
-
         elif act == "adm_bc":
             msg = bot.edit_message_text("📢 **THÔNG BÁO**\n⌨️ Nhập nội dung cần gửi:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_bc, m.message_id)
@@ -623,28 +624,53 @@ def handle_admin_actions(call):
             bot.register_next_step_handler(msg, process_adm_ban, m.message_id)
     except: pass
 
-def process_adm_money(message, old_msg_id, is_add):
+def process_adm_money_step2(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
-    try:
-        ref, money = message.text.split()
-        amt = parse_money(money)
-        u = find_user(ref)
-        if u:
-            final_amt = amt if is_add else -amt
-            users_col.update_one({'_id': u['_id']}, {'$inc': {'balance': final_amt}})
-            action_text = "CỘNG" if is_add else "TRỪ"
-            log_transaction(u['_id'], final_amt, f"Admin {action_text} tiền")
-            
-            if is_add:
-                try: bot.send_message(u['_id'], f"🔔 Admin đã nạp **{format_money(amt)}** cho bạn!")
-                except: pass
-            text, markup = get_admin_menu()
-            bot.edit_message_text(f"✅ Đã **{action_text} {format_money(amt)}** cho #{u['stt']}\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
-        else: raise Exception
-    except:
-        bot.edit_message_text("❌ Lỗi cú pháp!\n⌨️ Nhập lại (VD: `1 50k`):", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
-        bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_money, old_msg_id, is_add)
+    ref = message.text.strip()
+    u = find_user(ref)
+    if not u:
+        bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại STT/ID/Username:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+        bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_money_step2, old_msg_id)
+        return
+    
+    if message.from_user.id not in temp_data: temp_data[message.from_user.id] = {}
+    temp_data[message.from_user.id]['target_user'] = u
+    
+    uname = f"@{u['username']}" if u.get('username') else "Không có"
+    text = (f"👤 Đang chọn Khách: **{uname}** (STT: `#{u['stt']}`)\n💰 Số dư hiện tại: **{format_money(u.get('balance', 0))}**\n\n"
+            "👉 **BƯỚC 2: Nhập số tiền**\n➕ CỘNG TIỀN: Nhập `50k`\n➖ TRỪ TIỀN: Nhập `-50k`\n\n⌨️ Nhập số tiền vào ô chat:")
+    bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_money_step3, old_msg_id)
+
+def process_adm_money_step3(message, old_msg_id):
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
+    text_amt = message.text.strip().lower()
+    is_sub = False
+    if text_amt.startswith('-'):
+        is_sub = True
+        text_amt = text_amt[1:] 
+        
+    amt = parse_money(text_amt)
+    if amt < 0: 
+        bot.edit_message_text("❌ Số tiền không hợp lệ!\n⌨️ Nhập lại (VD: `50k` hoặc `-50k`):", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+        bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_money_step3, old_msg_id)
+        return
+        
+    target_user = temp_data.get(message.from_user.id, {}).get('target_user')
+    final_amt = -amt if is_sub else amt
+    users_col.update_one({'_id': target_user['_id']}, {'$inc': {'balance': final_amt}})
+    
+    action_text = "TRỪ" if is_sub else "CỘNG"
+    log_transaction(target_user['_id'], final_amt, f"Admin {action_text.lower()} tiền")
+    
+    if not is_sub:
+        try: bot.send_message(target_user['_id'], f"🔔 Admin đã gửi tặng **{format_money(amt)}** cho bạn!")
+        except: pass
+        
+    text, markup = get_admin_menu()
+    bot.edit_message_text(f"✅ Đã **{action_text} {format_money(amt)}** cho #{target_user['stt']}\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
 
 def process_adm_mgr_info(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
@@ -653,14 +679,10 @@ def process_adm_mgr_info(message, old_msg_id):
     u = find_user(ref)
     if u:
         uname = f"@{u['username']}" if u.get('username') else "Không có"
-        text = (
-            f"👤 **THÔNG TIN KHÁCH HÀNG**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-            f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: {uname} | 🌟 VIP: `{u.get('vip', 0)}`\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-            f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n"
-            f"💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
-            f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n"
-            f"🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️"
-        )
+        text = (f"👤 **THÔNG TIN KHÁCH HÀNG**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: {uname} | 🌟 VIP: `{u.get('vip', 0)}`\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
+                f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**")
         bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
     else:
         bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
@@ -674,13 +696,10 @@ def process_adm_mgr_logs(message, old_msg_id):
     if u:
         logs = list(msg_logs_col.find({"uid": u['_id']}).sort("_id", -1).limit(25))
         uname = f"@{u['username']}" if u.get('username') else "Không có"
-        if not logs:
-            text = f"👤 Lịch sử chat của #{u['stt']} ({uname}):\n📭 Chưa có tin nhắn nào!"
+        if not logs: text = f"👤 Lịch sử chat của #{u['stt']} ({uname}):\n📭 Chưa có tin nhắn nào!"
         else:
             text = f"👤 LỊCH SỬ CHAT #{u['stt']} ({uname}):\n\n"
-            for log in reversed(logs):
-                text += f"🕒 `{log.get('time', 'N/A')}`: {log.get('text', '')}\n"
-        
+            for log in reversed(logs): text += f"🕒 `{log.get('time', 'N/A')}`: {log.get('text', '')}\n"
         bot.edit_message_text(text[:4000], message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
     else:
         bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
