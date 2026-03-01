@@ -192,7 +192,6 @@ def get_deposit_kb():
 
 def get_withdraw_kb():
     kb = types.InlineKeyboardMarkup(row_width=3)
-    # Rút tiền tối thiểu 200k
     kb.add(types.InlineKeyboardButton("200k", callback_data="rut_200000"), types.InlineKeyboardButton("500k", callback_data="rut_500000"), types.InlineKeyboardButton("1M", callback_data="rut_1000000"),
            types.InlineKeyboardButton("2M", callback_data="rut_2000000"), types.InlineKeyboardButton("5M", callback_data="rut_5000000"), types.InlineKeyboardButton("10M", callback_data="rut_10000000"))
     kb.add(types.InlineKeyboardButton("✍️ SỐ TIỀN KHÁC", callback_data="rut_custom"))
@@ -215,7 +214,7 @@ def cmd_start(message):
     if is_spam(message.from_user.id): return
     bot.clear_step_handler_by_chat_id(message.chat.id)
     user = get_user(message.from_user.id) 
-    if user['is_banned']: return bot.reply_to(message, "⛔ Tài khoản đã bị khóa.")
+    if user.get('is_banned'): return bot.reply_to(message, "⛔ Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Admin!")
     
     text, markup = get_main_menu(user)
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='Markdown')
@@ -225,7 +224,7 @@ def handle_user_menus(call):
     if is_spam(call.from_user.id): return
     bot.clear_step_handler_by_chat_id(call.message.chat.id)
     user = get_user(call.from_user.id)
-    if user['is_banned']: return
+    if user.get('is_banned'): return bot.answer_callback_query(call.id, "⛔ Tài khoản của bạn đã bị khóa!", show_alert=True)
     
     act = call.data
     m = call.message
@@ -317,6 +316,7 @@ def handle_user_menus(call):
 def handle_bet_buttons(call):
     uid = call.from_user.id
     user = get_user(uid)
+    if user.get('is_banned'): return
     act = call.data
     m = call.message
     side = temp_data.get(uid, {}).get('side', 'TÀI')
@@ -417,6 +417,7 @@ def process_giftcode(message, old_msg_id):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('nap_') or call.data.startswith('canceldep_'))
 def handle_deposit_calls(call):
     user = get_user(call.from_user.id)
+    if user.get('is_banned'): return
     act = call.data
     m = call.message
     uid = call.from_user.id
@@ -494,6 +495,7 @@ def handle_bill_photo(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rut_'))
 def handle_withdraw_calls(call):
     user = get_user(call.from_user.id)
+    if user.get('is_banned'): return
     act = call.data
     m = call.message
     uid = call.from_user.id
@@ -601,6 +603,37 @@ def handle_admin_actions(call):
     act = call.data
     m = call.message
     
+    # ---------------- NÚT BAN/UNBAN TÍCH HỢP ----------------
+    if act.startswith("adm_toggleban_"):
+        uid_str = act.split("adm_toggleban_")[1]
+        target_uid = int(uid_str) if uid_str.isdigit() else uid_str
+        
+        u = users_col.find_one({'_id': target_uid})
+        if u:
+            new_status = not u.get('is_banned', False)
+            users_col.update_one({'_id': target_uid}, {'$set': {'is_banned': new_status}})
+            
+            # Tự động load lại bảng thông tin user với trạng thái mới
+            u['is_banned'] = new_status
+            uname = f"@{u['username']}" if u.get('username') else "Không có"
+            status_text = "🔴 ĐANG BỊ KHÓA" if new_status else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
+            
+            text = (f"👤 **THÔNG TIN KHÁCH HÀNG**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                    f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: `{uname}` | 🌟 VIP: `{u.get('vip', 0)}`\n"
+                    f"⚠️ Trạng thái: **{status_text}**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                    f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
+                    f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**")
+            
+            kb = types.InlineKeyboardMarkup(row_width=1)
+            btn_text = "🟢 MỞ KHÓA (UNBAN)" if new_status else "🚫 KHÓA TÀI KHOẢN (BAN)"
+            kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"adm_toggleban_{u['_id']}"))
+            kb.add(get_back_admin_btn().keyboard[0][0])
+            
+            bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
+            bot.answer_callback_query(call.id, f"✅ Đã {'Khóa' if new_status else 'Mở Khóa'} thành công #{u['stt']}", show_alert=False)
+        return
+    # --------------------------------------------------------
+
     if act.startswith("admappr_"):
         dep_id = act.split("_")[1]
         dep = deposits_col.find_one({"_id": dep_id})
@@ -612,7 +645,6 @@ def handle_admin_actions(call):
             log_transaction(uid, amt, "Nạp tiền thành công")
             bot.edit_message_caption(f"✅ **ĐÃ DUYỆT CỘNG {format_money(amt)}**\n\n" + m.caption, m.chat.id, m.message_id, parse_mode='Markdown')
             
-            # --- AUTO UPDATE VIP KHI DUYỆT BILL ---
             updated_u = users_col.find_one({'_id': uid})
             total_dep = updated_u.get('total_deposited', 0)
             current_vip = updated_u.get('vip', 0)
@@ -716,10 +748,8 @@ def handle_admin_actions(call):
                 tbet = format_money(u.get('total_bet', 0))
                 twon = format_money(u.get('total_won', 0))
                 
-                # Hiển thị trực tiếp STT, Tên, Dư, Cược, Thắng ngay trên bảng
                 line = f"`#{u['stt']}` | `{uname}` | Dư: {bal} | Cược: {tbet} | Win: {twon}\n"
                 
-                # Telegram giới hạn độ dài tin nhắn, nếu quá dài sẽ hiển thị một phần và yêu cầu tải File
                 if len(text_list) + len(line) > 3500:
                     text_list += f"\n*... và {count - shown_count} người dùng khác.*"
                     break
@@ -733,7 +763,6 @@ def handle_admin_actions(call):
             text_list += "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n👇 **Chọn chức năng quản lý chi tiết:**"
             
             kb = types.InlineKeyboardMarkup(row_width=1)
-            # Nút xuất file TXT sẽ hiển thị nếu danh sách bị quá dài
             if count > shown_count:
                 kb.add(types.InlineKeyboardButton("📜 XUẤT TOÀN BỘ RA FILE TXT", callback_data="adm_mgr_list"))
             else:
@@ -757,7 +786,6 @@ def handle_admin_actions(call):
                     bal = u.get("balance", 0)
                     tbet = u.get("total_bet", 0)
                     twon = u.get("total_won", 0)
-                    # Định dạng hiển thị cụ thể trong file TXT
                     text_list += f"STT: #{u['stt']} | ID: {u['_id']} | @{uname}\n"
                     text_list += f" ├ Số dư hiện tại : {bal:,} VNĐ\n"
                     text_list += f" ├ Số tiền cược   : {tbet:,} VNĐ\n"
@@ -784,8 +812,10 @@ def handle_admin_actions(call):
         elif act == "adm_vip":
             msg = bot.edit_message_text("🌟 **SET VIP**\n⌨️ Nhập: `STT/ID CấpVIP` (VD: `1 2`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_vip, m.message_id)
+            
+        # ---------------- SỬA LẠI NÚT BAN CŨ ----------------
         elif act == "adm_ban":
-            msg = bot.edit_message_text("🚫 **KHÓA TÀI KHOẢN**\n⌨️ Nhập: `STT/ID ban/unban` (VD: `1 ban`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            msg = bot.edit_message_text("🚫 **KHÓA / MỞ TÀI KHOẢN**\n\n⌨️ Nhập `STT` hoặc `Username` của khách cần xử lý:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_ban, m.message_id)
     except: pass
 
@@ -844,11 +874,22 @@ def process_adm_mgr_info(message, old_msg_id):
     u = find_user(ref)
     if u:
         uname = f"@{u['username']}" if u.get('username') else "Không có"
+        is_ban = u.get('is_banned', False)
+        status_text = "🔴 ĐANG BỊ KHÓA" if is_ban else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
+        
         text = (f"👤 **THÔNG TIN KHÁCH HÀNG**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: `{uname}` | 🌟 VIP: `{u.get('vip', 0)}`\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                f"🔢 STT: `#{u['stt']}` | 🆔 ID: `{u['_id']}`\n📝 Username: `{uname}` | 🌟 VIP: `{u.get('vip', 0)}`\n"
+                f"⚠️ Trạng thái: **{status_text}**\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
                 f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**")
-        bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+        
+        # Thêm nút bấm Ban/Unban trực tiếp ở dưới cùng
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        btn_text = "🟢 MỞ KHÓA (UNBAN)" if is_ban else "🚫 KHÓA TÀI KHOẢN (BAN)"
+        kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"adm_toggleban_{u['_id']}"))
+        kb.add(get_back_admin_btn().keyboard[0][0])
+        
+        bot.edit_message_text(text, message.chat.id, old_msg_id, reply_markup=kb, parse_mode='Markdown')
     else:
         bot.edit_message_text("❌ Không tìm thấy User!\n⌨️ Nhập lại:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_mgr_info, old_msg_id)
@@ -898,17 +939,16 @@ def process_adm_vip(message, old_msg_id):
 def process_adm_ban(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
-    try:
-        ref, act = message.text.split()
-        is_ban = True if act.lower() == 'ban' else False
-        u = find_user(ref)
-        if u:
-            users_col.update_one({'_id': u['_id']}, {'$set': {'is_banned': is_ban}})
-            text, markup = get_admin_menu()
-            bot.edit_message_text(f"✅ Đã {'Khóa' if is_ban else 'Mở'} #{u['stt']}\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
-        else: raise Exception
-    except:
-        bot.edit_message_text("❌ Lỗi!\n⌨️ Nhập lại (VD: `1 ban`):", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+    ref = message.text.strip()
+    u = find_user(ref)
+    if u:
+        new_status = not u.get('is_banned', False)
+        users_col.update_one({'_id': u['_id']}, {'$set': {'is_banned': new_status}})
+        text, markup = get_admin_menu()
+        status_str = "KHÓA" if new_status else "MỞ KHÓA"
+        bot.edit_message_text(f"✅ Đã **{status_str}** tài khoản #{u['stt']} (`@{u.get('username', 'N/A')}`)\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
+    else:
+        bot.edit_message_text("❌ Lỗi! Không tìm thấy khách hàng.\n⌨️ Nhập lại `STT`:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_ban, old_msg_id)
 
 # ================= AUTO HỦY ĐƠN NẠP NGẦM =================
