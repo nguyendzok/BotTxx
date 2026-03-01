@@ -551,6 +551,13 @@ def process_rut_custom(message, old_msg_id):
 def process_rut_info(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
+    
+    # ---------------- HIỆU ỨNG CHỜ XỬ LÝ ----------------
+    try:
+        bot.edit_message_text("⏳ **Hệ thống đang tạo lệnh rút tiền, vui lòng đợi trong giây lát...**", message.chat.id, old_msg_id, parse_mode='Markdown')
+    except: pass
+    # ----------------------------------------------------
+    
     uid = message.from_user.id
     user = get_user(uid)
     amt = temp_data.get(uid, {}).get('amount', 0)
@@ -583,8 +590,11 @@ def process_rut_info(message, old_msg_id):
     try: bot.send_photo(ADMIN_ID, photo=qr_url, caption=admin_text, reply_markup=kb, parse_mode='Markdown')
     except Exception: bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode='Markdown')
     
+    # Delay 1.5s để cảm giác tiến trình đang load
+    time.sleep(1.5)
+    
     text, m_markup = get_main_menu(get_user(uid))
-    bot.edit_message_text(f"✅ Đã gửi yêu cầu rút **{format_money(amt)}** tới hệ thống! Đang chờ duyệt.\n\n{text}", message.chat.id, old_msg_id, reply_markup=m_markup, parse_mode='Markdown')
+    bot.edit_message_text(f"✅ **Đã gửi yêu cầu rút {format_money(amt)} tới hệ thống!**\n⏳ Vui lòng chờ Admin duyệt và chuyển tiền.\n\n{text}", message.chat.id, old_msg_id, reply_markup=m_markup, parse_mode='Markdown')
 
 # ==========================================
 # ADMIN MENU QUẢN TRỊ 
@@ -603,7 +613,6 @@ def handle_admin_actions(call):
     act = call.data
     m = call.message
     
-    # ---------------- NÚT BAN/UNBAN TÍCH HỢP ----------------
     if act.startswith("adm_toggleban_"):
         uid_str = act.split("adm_toggleban_")[1]
         target_uid = int(uid_str) if uid_str.isdigit() else uid_str
@@ -613,7 +622,6 @@ def handle_admin_actions(call):
             new_status = not u.get('is_banned', False)
             users_col.update_one({'_id': target_uid}, {'$set': {'is_banned': new_status}})
             
-            # Tự động load lại bảng thông tin user với trạng thái mới
             u['is_banned'] = new_status
             uname = f"@{u['username']}" if u.get('username') else "Không có"
             status_text = "🔴 ĐANG BỊ KHÓA" if new_status else "🟢 HOẠT ĐỘNG BÌNH THƯỜNG"
@@ -632,7 +640,6 @@ def handle_admin_actions(call):
             bot.edit_message_text(text, m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
             bot.answer_callback_query(call.id, f"✅ Đã {'Khóa' if new_status else 'Mở Khóa'} thành công #{u['stt']}", show_alert=False)
         return
-    # --------------------------------------------------------
 
     if act.startswith("admappr_"):
         dep_id = act.split("_")[1]
@@ -733,9 +740,6 @@ def handle_admin_actions(call):
             kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 VỀ QUẢN LÝ CODE", callback_data="adm_code"))
             bot.edit_message_text("🗑 **Đã xóa toàn bộ mã Giftcode hiện có trong hệ thống!**", m.chat.id, m.message_id, reply_markup=kb, parse_mode='Markdown')
         
-        # ====================================================
-        # HIỂN THỊ DANH SÁCH USER TRỰC TIẾP LÊN MÀN HÌNH ADMIN
-        # ====================================================
         elif act == "adm_mgr":
             cursor = users_col.find().sort("stt", 1)
             count = users_col.count_documents({})
@@ -812,10 +816,8 @@ def handle_admin_actions(call):
         elif act == "adm_vip":
             msg = bot.edit_message_text("🌟 **SET VIP**\n⌨️ Nhập: `STT/ID CấpVIP` (VD: `1 2`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_vip, m.message_id)
-            
-        # ---------------- SỬA LẠI NÚT BAN CŨ ----------------
         elif act == "adm_ban":
-            msg = bot.edit_message_text("🚫 **KHÓA / MỞ TÀI KHOẢN**\n\n⌨️ Nhập `STT` hoặc `Username` của khách cần xử lý:", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+            msg = bot.edit_message_text("🚫 **KHÓA TÀI KHOẢN**\n⌨️ Nhập: `STT/ID ban/unban` (VD: `1 ban`)", m.chat.id, m.message_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
             bot.register_next_step_handler(msg, process_adm_ban, m.message_id)
     except: pass
 
@@ -883,7 +885,6 @@ def process_adm_mgr_info(message, old_msg_id):
                 f"💰 Dư hiện tại: **{format_money(u.get('balance', 0))}**\n💵 Tổng Nạp: **{format_money(u.get('total_deposited', 0))}**\n"
                 f"🎲 Tổng Cược: **{format_money(u.get('total_bet', 0))}**\n🏆 Tổng Thắng: **{format_money(u.get('total_won', 0))}**")
         
-        # Thêm nút bấm Ban/Unban trực tiếp ở dưới cùng
         kb = types.InlineKeyboardMarkup(row_width=1)
         btn_text = "🟢 MỞ KHÓA (UNBAN)" if is_ban else "🚫 KHÓA TÀI KHOẢN (BAN)"
         kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"adm_toggleban_{u['_id']}"))
@@ -939,16 +940,17 @@ def process_adm_vip(message, old_msg_id):
 def process_adm_ban(message, old_msg_id):
     try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
-    ref = message.text.strip()
-    u = find_user(ref)
-    if u:
-        new_status = not u.get('is_banned', False)
-        users_col.update_one({'_id': u['_id']}, {'$set': {'is_banned': new_status}})
-        text, markup = get_admin_menu()
-        status_str = "KHÓA" if new_status else "MỞ KHÓA"
-        bot.edit_message_text(f"✅ Đã **{status_str}** tài khoản #{u['stt']} (`@{u.get('username', 'N/A')}`)\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
-    else:
-        bot.edit_message_text("❌ Lỗi! Không tìm thấy khách hàng.\n⌨️ Nhập lại `STT`:", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
+    try:
+        ref, act = message.text.split()
+        is_ban = True if act.lower() == 'ban' else False
+        u = find_user(ref)
+        if u:
+            users_col.update_one({'_id': u['_id']}, {'$set': {'is_banned': is_ban}})
+            text, markup = get_admin_menu()
+            bot.edit_message_text(f"✅ Đã {'Khóa' if is_ban else 'Mở'} #{u['stt']}\n\n{text}", message.chat.id, old_msg_id, reply_markup=markup, parse_mode='Markdown')
+        else: raise Exception
+    except:
+        bot.edit_message_text("❌ Lỗi!\n⌨️ Nhập lại (VD: `1 ban`):", message.chat.id, old_msg_id, reply_markup=get_back_admin_btn(), parse_mode='Markdown')
         bot.register_next_step_handler_by_chat_id(message.chat.id, process_adm_ban, old_msg_id)
 
 # ================= AUTO HỦY ĐƠN NẠP NGẦM =================
